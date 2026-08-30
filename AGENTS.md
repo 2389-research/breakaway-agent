@@ -9,7 +9,7 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
 ## What this is
 
 - `bun src/index.ts "task"` — one-shot. `bun src/index.ts` — REPL.
-- Flags: `--cwd`, `--model`, `--system`, `--verbose`, `--help`.
+- Flags: `--cwd`, `--model`, `--system`, `--max-turns`, `--verbose`, `--help`.
 - **Pure YOLO by design**: no permission prompts, no sandbox, no confirmation
   gates. The agent executes whatever the model asks. This is intentional
   (Doc Bizmarkie's explicit call) — do not add gates or y/N prompts.
@@ -31,6 +31,28 @@ Design goal: swapping context strategy, system prompt, or tool set each touches
 
 - `bun test` — from repo root (Bun auto-loads `.env`; suite includes live
   gateway tests). This is the check. Run it before claiming anything works.
+
+## REPL commands
+
+| Command | Effect |
+|---------|--------|
+| `/reload` | Hot-reload seams (tools.ts, policy.ts, system.txt) via SIGHUP path |
+| `/restart` | Exit with code 42; `break-away-loop` relaunches the process |
+
+## Signals
+
+| Signal | Effect |
+|--------|--------|
+| `SIGHUP` | Hot-reload: re-imports tools + policy, re-reads system prompt. Registered at module load. |
+| `SIGUSR2` | Clean restart: exits with code 42 so `break-away-loop` relaunches. |
+
+## Wrapper: bin/break-away-loop
+
+Relaunches break-away on exit code 42 (`RESTART_EXIT_CODE`), up to `BREAK_AWAY_MAX_RESTARTS` times (default 20). Pass `BREAK_AWAY_CMD` to override the command in tests.
+
+## spawn_agent tool
+
+Launches a detached child agent via `nohup bun src/index.ts ... &`. Child survives parent exit. Depth-guarded: `BREAK_AWAY_DEPTH` tracks nesting; `BREAK_AWAY_MAX_DEPTH` (default 3) sets the cap. Results go to `spawn-<ts>.out`/`.err` in the transcript directory.
 
 ## Hard rules
 

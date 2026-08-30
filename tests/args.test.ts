@@ -2,7 +2,10 @@
 // ABOUTME: Tests parseArgs exported from index.ts; no I/O, no network.
 
 import { describe, test, expect } from 'bun:test';
-import { parseArgs } from '../src/index.ts';
+import { parseArgs, loadSystemPrompt } from '../src/index.ts';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // parseArgs receives process.argv-style array: ['bun', 'src/index.ts', ...rest]
 function args(...rest: string[]): string[] {
@@ -68,5 +71,60 @@ describe('parseArgs — --help and unknown flags', () => {
   test('unknown flag sets unknownFlag', () => {
     const result = parseArgs(args('--blorp'));
     expect(result.unknownFlag).toBe('--blorp');
+  });
+});
+
+describe('parseArgs — --max-turns', () => {
+  test('parses a valid integer', () => {
+    const result = parseArgs(args('--max-turns', '7', 'task'));
+    expect(result.maxTurns).toBe(7);
+    expect(result.task).toBe('task');
+  });
+
+  test('defaults to null when flag absent', () => {
+    const result = parseArgs(args('task'));
+    expect(result.maxTurns).toBeNull();
+  });
+
+  test('rejects non-integer values as unknownFlag', () => {
+    const result = parseArgs(args('--max-turns', 'abc'));
+    expect(result.maxTurns).toBeNull();
+    expect(result.unknownFlag).toMatch(/max-turns/);
+  });
+
+  test('rejects zero and negatives as unknownFlag', () => {
+    expect(parseArgs(args('--max-turns', '0')).unknownFlag).toMatch(/max-turns/);
+    expect(parseArgs(args('--max-turns', '-3')).unknownFlag).toMatch(/max-turns/);
+  });
+});
+
+describe('loadSystemPrompt', () => {
+  test('returns file content when the file exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ba-lsp-'));
+    const p = join(dir, 'sys.txt');
+    writeFileSync(p, 'hello system');
+    try {
+      const result = loadSystemPrompt(p, false);
+      expect(result).toBe('hello system');
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  test('isDefault=true + missing file returns fallback string', () => {
+    const result = loadSystemPrompt('/nonexistent/path/sys.txt', true);
+    expect(result).toBeTruthy();
+    expect(typeof result).toBe('string');
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  test('isDefault=false + missing file exits with code 1', () => {
+    const indexPath = new URL('../src/index.ts', import.meta.url).pathname;
+    const result = Bun.spawnSync(
+      ['bun', indexPath, '--system', '/nonexistent/path/sys.txt', 'dummy task'],
+      { env: { ...process.env, BREAK_AWAY_TRANSCRIPT_DIR: '/tmp' } },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain('/nonexistent/path/sys.txt');
   });
 });

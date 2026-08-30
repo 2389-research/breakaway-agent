@@ -4,15 +4,58 @@
 import { run, setVerbose } from './agent.ts';
 import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
-import type { Message, FinalState } from './types.ts';
+import type { Message, FinalState, Policy, Tool } from './types.ts';
 import { openTranscript, writeEvent, closeTranscript } from './transcript.ts';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 // Anchor paths before any chdir so they survive --cwd.
 const SOURCE_DIR = import.meta.dir;
+
+export const RESTART_EXIT_CODE = 42;
+
+// Exit with RESTART_EXIT_CODE on SIGUSR2 so the wrapper script (bin/break-away-loop) relaunches.
+process.on('SIGUSR2', () => {
+  process.exit(RESTART_EXIT_CODE);
+});
+
 const DEFAULT_TRANSCRIPT_DIR = resolve(SOURCE_DIR, '../.transcripts');
 const DEFAULT_SYSTEM_PATH = join(SOURCE_DIR, '../system.txt');
+
+// Mutable refs updated by doReload; runTask/repl read from here so hot-reload takes effect.
+export const currentRefs: { tools: Tool[]; systemPrompt: string; policy: Policy } = {
+  tools,
+  systemPrompt: '',
+  policy: defaultPolicy,
+};
+
+export async function doReload(toolsPath: string, policyPath: string, systemPath: string): Promise<boolean> {
+  try {
+    const ts = Date.now();
+    const [toolsMod, policyMod] = await Promise.all([
+      import(toolsPath + '?v=' + ts),
+      import(policyPath + '?v=' + ts),
+    ]);
+    const newTools: Tool[] = toolsMod.tools;
+    const newPolicy: Policy = policyMod.defaultPolicy;
+    const newSystemPrompt = readFileSync(systemPath, 'utf8').trim();
+    currentRefs.tools = newTools;
+    currentRefs.policy = newPolicy;
+    currentRefs.systemPrompt = newSystemPrompt;
+    process.stderr.write('[reload] hot-reloaded seams\n');
+    return true;
+  } catch (err) {
+    process.stderr.write(`[reload] failed: ${err}\n`);
+    return false;
+  }
+}
+
+// SIGHUP handler: hot-reload seams. Registered at module load with default paths;
+// main() re-registers with the actual systemPath after parsing args.
+let _sighupSystemPath = DEFAULT_SYSTEM_PATH;
+process.on('SIGHUP', () => {
+  doReload(resolve(SOURCE_DIR, 'tools.ts'), resolve(SOURCE_DIR, 'policy.ts'), _sighupSystemPath);
+});
 
 export function formatStats(state: FinalState): string {
   const secs = (state.elapsed / 1000).toFixed(1);
@@ -28,6 +71,7 @@ Options:
   --cwd <path>     Change working directory before running tools.
   --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL).
   --system <path>  Path to system prompt file (default: system.txt).
+  --max-turns <n>  Override the loop turn budget (default: policy's maxTurns).
   --verbose        Print model reasoning (if supported by provider).
   --help           Print this help and exit.
 `.trim();
@@ -38,6 +82,7 @@ export type ParsedArgs = {
   verbose: boolean;
   model: string | null;
   cwd: string | null;
+  maxTurns: number | null;
   help: boolean;
   unknownFlag: string | null;
 };
@@ -48,6 +93,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let verbose = false;
   let model: string | null = null;
   let cwd: string | null = null;
+  let maxTurns: number | null = null;
   let help = false;
   let unknownFlag: string | null = null;
 
@@ -63,6 +109,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
       model = args[++i];
     } else if (args[i] === '--cwd' && args[i + 1]) {
       cwd = args[++i];
+    } else if (args[i] === '--max-turns' && args[i + 1]) {
+      const n = Number(args[++i]);
+      if (!Number.isInteger(n) || n < 1) {
+        unknownFlag = `--max-turns (invalid value: ${args[i]})`;
+      } else {
+        maxTurns = n;
+      }
     } else if (args[i].startsWith('--')) {
       unknownFlag = args[i];
     } else {
@@ -70,14 +123,19 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { task, systemPath, verbose, model, cwd, help, unknownFlag };
+  return { task, systemPath, verbose, model, cwd, maxTurns, help, unknownFlag };
 }
 
-function loadSystemPrompt(path: string): string {
+const FALLBACK_SYSTEM_PROMPT =
+  'You are a code agent. Work step by step. Use tools to read, write, and run code. Report what you did when done.';
+
+export function loadSystemPrompt(path: string, isDefault: boolean): string {
   try {
     return readFileSync(path, 'utf8').trim();
-  } catch {
-    return 'You are a code agent. Work step by step. Use tools to read, write, and run code. Report what you did when done.';
+  } catch (err) {
+    if (isDefault) return FALLBACK_SYSTEM_PROMPT;
+    process.stderr.write(`error: cannot read system prompt: ${path}: ${err}\n`);
+    process.exit(1);
   }
 }
 
@@ -89,6 +147,7 @@ async function runTask(
   task: string,
   systemPrompt: string,
   model: string | null,
+  basePolicy: Policy = defaultPolicy,
 ): Promise<FinalState> {
   const messages: Message[] = [
     { role: 'system', content: systemPrompt },
@@ -103,8 +162,8 @@ async function runTask(
     cwd: process.cwd(),
   });
 
-  const policy = { ...defaultPolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
-  const state = await run(messages, tools, policy, model);
+  const policy = { ...basePolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
+  const state = await run(messages, currentRefs.tools, policy, model);
 
   await writeEvent(handle, {
     event: 'done',
@@ -117,7 +176,7 @@ async function runTask(
   return state;
 }
 
-async function repl(systemPrompt: string, model: string | null): Promise<void> {
+async function repl(systemPrompt: string, systemPath: string, model: string | null, basePolicy: Policy = defaultPolicy): Promise<void> {
   const messages: Message[] = [{ role: 'system', content: systemPrompt }];
 
   const handle = await openTranscript(transcriptDir());
@@ -137,10 +196,23 @@ async function repl(systemPrompt: string, model: string | null): Promise<void> {
       continue;
     }
 
+    if (task === '/reload') {
+      await doReload(
+        resolve(SOURCE_DIR, 'tools.ts'),
+        resolve(SOURCE_DIR, 'policy.ts'),
+        systemPath,
+      );
+      process.stderr.write('> ');
+      continue;
+    }
+    if (task === '/restart') {
+      process.exit(RESTART_EXIT_CODE);
+    }
+
     messages.push({ role: 'user', content: task });
 
-    const replPolicy = { ...defaultPolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
-    const state = await run(messages, tools, replPolicy, model);
+    const replPolicy = { ...basePolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
+    const state = await run(messages, currentRefs.tools, replPolicy, model);
 
     // Append the assistant's final reply to messages for continuity
     const lastAssistant = [...state.messages].reverse().find((m) => m.role === 'assistant');
@@ -170,7 +242,7 @@ async function repl(systemPrompt: string, model: string | null): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { task, systemPath, verbose, model, cwd, help, unknownFlag } = parseArgs(process.argv);
+  const { task, systemPath, verbose, model, cwd, maxTurns, help, unknownFlag } = parseArgs(process.argv);
 
   if (unknownFlag) {
     process.stderr.write(`error: unknown flag: ${unknownFlag}\n\n${USAGE}\n`);
@@ -193,10 +265,17 @@ async function main(): Promise<void> {
     process.chdir(resolved);
   }
 
-  const systemPrompt = loadSystemPrompt(systemPath);
+  const isDefaultSystem = systemPath === DEFAULT_SYSTEM_PATH;
+  const systemPrompt = loadSystemPrompt(systemPath, isDefaultSystem);
+  currentRefs.systemPrompt = systemPrompt;
+  const policy = maxTurns !== null ? { ...defaultPolicy, maxTurns } : defaultPolicy;
+  currentRefs.policy = policy;
+
+  // Update the SIGHUP handler's systemPath now that we know it.
+  _sighupSystemPath = systemPath;
 
   if (task) {
-    const state = await runTask(task, systemPrompt, model);
+    const state = await runTask(task, systemPrompt, model, policy);
     const lastMsg = state.messages[state.messages.length - 1];
     if (lastMsg && lastMsg.content) {
       process.stdout.write(lastMsg.content + '\n');
@@ -204,7 +283,7 @@ async function main(): Promise<void> {
     // Stats to stderr only
     process.stderr.write(formatStats(state) + '\n');
   } else {
-    await repl(systemPrompt, model);
+    await repl(systemPrompt, systemPath, model, policy);
   }
 }
 

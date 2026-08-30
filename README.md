@@ -31,6 +31,7 @@ bun src/index.ts
 --cwd <path>     Change working directory before running tools
 --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL)
 --system <path>  Path to system prompt file (default: system.txt)
+--max-turns <n>  Override the loop turn budget (default: policy's maxTurns)
 --verbose        Print model reasoning (if supported by provider)
 --help           Print this help and exit
 ```
@@ -46,10 +47,6 @@ bun src/index.ts "describe the project" > answer.txt
 
 **Add a tool:** append one object `{definition, handler}` to the array in `src/tools.ts`. That's it.
 
-**Self-restart:** the `restart_self` tool re-execs the agent with the same argv
-(so a fresh Bun runtime picks up edits to `src/` or `system.txt`). Budget-capped
-at 3 restarts per run via the `BREAK_AWAY_RESTARTS` env counter.
-
 **Swap the system prompt:** pass `--system /path/to/your/prompt.txt`, or edit `system.txt` directly.
 
 **Change max turns or error policy:** edit `src/policy.ts`. `onToolError` accepts `'retry' | 'abort' | 'nudge'`.
@@ -57,3 +54,30 @@ at 3 restarts per run via the `BREAK_AWAY_RESTARTS` env counter.
 **Swap context strategy:** replace `contextStrategy` in `src/policy.ts` with a function that filters or trims the message array. A sliding-window example lives in `e2e/seam-proof.ts`.
 
 **The loop itself** is ~90 lines in `src/agent.ts`. All behavior is injected through `Policy` — the loop is policy-blind.
+
+## Self-modification
+
+The agent can edit its own source files and reload or restart without restarting the wrapper:
+
+- **Hot-reload seams** (tools.ts, policy.ts, system.txt): after editing, send `SIGHUP` to the process (`kill -HUP <pid>`) or type `/reload` in the REPL. The running agent re-imports tools and policy via cache-busted dynamic import and re-reads system.txt. No restart needed; the current REPL session continues.
+
+- **Clean restart** (agent.ts, index.ts): after editing core files, send `SIGUSR2` (`kill -USR2 <pid>`) or type `/restart` in the REPL. The process exits with code 42 so `bin/break-away-loop` (see below) relaunches it.
+
+- **`bin/break-away-loop`**: a wrapper that relaunches break-away whenever it exits with code 42, up to 20 times. Run instead of `bun src/index.ts`:
+  ```sh
+  bin/break-away-loop "task"   # one-shot with auto-restart
+  bin/break-away-loop          # REPL with auto-restart
+  ```
+  `BREAK_AWAY_MAX_RESTARTS` overrides the cap (useful in tests).
+
+## Subagents
+
+`spawn_agent` launches a detached child agent that survives the parent's exit:
+
+```
+spawn_agent(task="...", cwd="/path/to/work")
+```
+
+The child runs `bun src/index.ts` in the background. Its stdout goes to a `spawn-<ts>.out` file in the transcript directory; stderr to `spawn-<ts>.err`. The parent gets back the pid and file paths immediately.
+
+Agent depth is tracked via `BREAK_AWAY_DEPTH` (default 0). `BREAK_AWAY_MAX_DEPTH` (default 3) caps nesting — spawn_agent returns an error rather than launching when the cap is reached.

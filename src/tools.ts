@@ -1,7 +1,35 @@
-// ABOUTME: Tool registry — read_file, write_file, edit_file, bash, restart_self. Each tool has a definition and handler.
+// ABOUTME: Tool registry — read_file, write_file, bash, spawn_agent.
 // ABOUTME: Output capped at 8000 chars; bash captures stdout, stderr, and exit code.
 
 import type { Tool } from './types.ts';
+import { join, resolve } from 'node:path';
+
+const TOOLS_SOURCE_DIR = import.meta.dir;
+const DEFAULT_SPAWN_TRANSCRIPT_DIR = resolve(TOOLS_SOURCE_DIR, '../.transcripts');
+
+export type SpawnArgsSuccess = { cmd: string; outFile: string; errFile: string };
+export type SpawnArgsError = { error: string };
+
+export function buildSpawnArgs(params: {
+  task: string;
+  cwd: string;
+  transcriptDir: string;
+  depth: number;
+  maxDepth: number;
+  ts: string;
+  indexPath: string;
+}): SpawnArgsSuccess | SpawnArgsError {
+  if (params.depth >= params.maxDepth) {
+    return { error: `spawn refused: max agent depth ${params.maxDepth} reached` };
+  }
+  const slug = params.ts.replace(/[:.]/g, '-');
+  const outFile = resolve(params.transcriptDir, `spawn-${slug}.out`);
+  const errFile = resolve(params.transcriptDir, `spawn-${slug}.err`);
+
+  const esc = (s: string) => s.replace(/'/g, `'\\''`);
+  const cmd = `nohup bun '${esc(params.indexPath)}' --cwd '${esc(params.cwd)}' '${esc(params.task)}' >'${esc(outFile)}' 2>'${esc(errFile)}' & echo $!`;
+  return { cmd, outFile, errFile };
+}
 
 const OUTPUT_CAP = 8000;
 
@@ -122,100 +150,50 @@ const bash: Tool = {
   },
 };
 
-
-const editFile: Tool = {
+const spawnAgent: Tool = {
   definition: {
     type: 'function',
     function: {
-      name: 'edit_file',
+      name: 'spawn_agent',
       description:
-        'Edit a file by replacing an exact string. old_string must match exactly (including whitespace) and, unless replace_all is true, must appear exactly once in the file.',
+        'Launch a detached child agent for a task. The child runs in the background and survives this process exiting. ' +
+        'Results are written to the .out file shown in the response. Depth-guarded: refuses if agent nesting is too deep.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute or relative path to the file.' },
-          old_string: { type: 'string', description: 'Exact text to replace.' },
-          new_string: { type: 'string', description: 'Replacement text.' },
-          replace_all: {
-            type: 'boolean',
-            description: 'Replace every occurrence (default false: requires exactly one match).',
-          },
+          task: { type: 'string', description: 'Task for the child agent to perform.' },
+          cwd: { type: 'string', description: 'Working directory for the child. Defaults to current cwd.' },
         },
-        required: ['path', 'old_string', 'new_string'],
+        required: ['task'],
       },
     },
   },
   async handler(args) {
-    const filePath = args['path'] as string;
-    const oldString = args['old_string'] as string;
-    const newString = args['new_string'] as string;
-    const replaceAll = Boolean(args['replace_all']);
-    try {
-      if (oldString === '') return 'error: old_string must be non-empty (use write_file to create files)';
-      const file = Bun.file(filePath);
-      const text = await file.text();
-      const count = text.split(oldString).length - 1;
-      if (count === 0) return `error: old_string not found in ${filePath}`;
-      if (count > 1 && !replaceAll) return `error: old_string occurs ${count} times in ${filePath}; pass replace_all or include more surrounding context`;
-      const updated = text.replaceAll(oldString, newString);
-      await Bun.write(filePath, updated);
-      return `edited ${filePath}: ${count} occurrence${count === 1 ? '' : 's'} replaced`;
-    } catch (err) {
-      return `error: ${String(err)}`;
-    }
-  },
-};
+    const task = args['task'] as string;
+    const taskCwd = (args['cwd'] as string | undefined) ?? process.cwd();
+    const depth = Number(process.env.BREAK_AWAY_DEPTH ?? '0');
+    const maxDepth = Number(process.env.BREAK_AWAY_MAX_DEPTH ?? '3');
+    const transcriptDir = process.env.BREAK_AWAY_TRANSCRIPT_DIR ?? DEFAULT_SPAWN_TRANSCRIPT_DIR;
+    const indexPath = resolve(TOOLS_SOURCE_DIR, 'index.ts');
+    const ts = new Date().toISOString();
 
-// restart_self: re-exec this process with the same argv so a fresh Bun runtime
-// picks up edits to the agent's own source (bun runs from source, so new code
-// just works). Budget-guarded via BREAK_AWAY_RESTARTS so a model can't loop
-// forever respawning itself.
-const RESTART_BUDGET = 3;
+    const result = buildSpawnArgs({ task, cwd: taskCwd, transcriptDir, depth, maxDepth, ts, indexPath });
+    if ('error' in result) return result.error;
 
-const restartSelf: Tool = {
-  definition: {
-    type: 'function',
-    function: {
-      name: 'restart_self',
-      description:
-        'Restart the agent process so it picks up changes to its own source code (src/, system.txt, tools). ' +
-        'Spawns a fresh copy of this process with the same arguments (in one-shot mode the task re-runs from the start; ' +
-        'in REPL mode a fresh REPL starts, conversation history is lost), then exits the current process. ' +
-        'Call this AFTER editing your own files, not instead of. Limited restarts per run.',
-      parameters: {
-        type: 'object',
-        properties: {
-          note: {
-            type: 'string',
-            description: 'Optional note printed to stderr before restarting (e.g. what changed).',
-          },
-        },
-      },
-    },
-  },
-  async handler(args) {
-    const note = typeof args['note'] === 'string' ? args['note'] : '';
-    const restarts = Number(process.env.BREAK_AWAY_RESTARTS ?? '0');
-    if (restarts >= RESTART_BUDGET) {
-      return `error: restart budget exhausted (${restarts}/${RESTART_BUDGET} restarts used); finish the task with the current code`;
-    }
     try {
-      if (note) process.stderr.write(`[restart_self] ${note}\n`);
-      const child = Bun.spawn([process.execPath, ...process.argv.slice(1)], {
-        stdio: ['inherit', 'inherit', 'inherit'],
-        env: { ...process.env, BREAK_AWAY_RESTARTS: String(restarts + 1) },
+      const proc = Bun.spawn(['bash', '-c', result.cmd], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: { ...process.env, BREAK_AWAY_DEPTH: String(depth + 1) },
       });
-      child.unref();
-      process.stderr.write(
-        `[restart_self] respawning as pid ${child.pid} (restart ${restarts + 1}/${RESTART_BUDGET}); exiting\n`,
-      );
-      // Let the child get a head start so its transcript open() doesn't race ours.
-      await Bun.sleep(150);
-      process.exit(0);
+      const pidStr = (await new Response(proc.stdout).text()).trim();
+      const pid = parseInt(pidStr, 10);
+      if (!pid || isNaN(pid)) return `error: failed to get child pid (got: ${pidStr})`;
+      return `spawned child agent (pid ${pid})\nresults: read_file ${result.outFile}\nerrors: read_file ${result.errFile}\ncheck alive: bash: kill -0 ${pid}`;
     } catch (err) {
       return `error: ${String(err)}`;
     }
   },
 };
 
-export const tools: Tool[] = [readFile, writeFile, editFile, bash, restartSelf];
+export const tools: Tool[] = [readFile, writeFile, bash, spawnAgent];

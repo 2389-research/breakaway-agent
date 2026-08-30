@@ -19,3 +19,6 @@
   bash-timeout path too (partial output is capped — regression test exists).
 - **YOLO is a feature.** No permission prompts anywhere, by explicit decision.
   Don't "helpfully" add confirmation gates.
+- **SIGHUP handler registered at module load, not in main().** The signal handler calls `doReload` with whatever `_sighupSystemPath` is set to (defaults to `system.txt`). main() updates `_sighupSystemPath` if `--system` was passed. Tests that import index.ts without calling main() will still see the SIGHUP handler registered.
+- **`doReload` uses cache-busted dynamic import.** `import(path + '?v=' + Date.now())` — verified working in Bun 1.3.14. If you pass the same path twice, the query-string suffix forces a fresh module load. Without it, Bun returns the cached module.
+- **`spawn_agent` depth guard uses env var, not argument.** `BREAK_AWAY_DEPTH` is inherited by child processes and incremented on each spawn. Never pass it explicitly to the child; let env inheritance handle it. `BREAK_AWAY_MAX_DEPTH` defaults to 3.
