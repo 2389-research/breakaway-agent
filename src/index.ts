@@ -6,7 +6,7 @@ import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
 import type { Message, FinalState, Policy, Tool } from './types.ts';
 import { openTranscript, writeEvent, closeTranscript, defaultTranscriptDir } from './transcript.ts';
-import { render, buildRenderConfig, type Tier } from './render.ts';
+import { render, buildRenderConfig, formatTransition, type Tier, type RenderConfig } from './render.ts';
 import { appendRecord, readRegistry, deriveAgentStates, diffAgentStates, type AgentState } from './registry.ts';
 import defaultSystemText from '../system.txt' with { type: 'text' };
 import { readFileSync, existsSync } from 'node:fs';
@@ -22,7 +22,9 @@ export function isEmbedded(): boolean {
 export const RESTART_EXIT_CODE = 42;
 
 // Exit with RESTART_EXIT_CODE on SIGUSR2 so the wrapper script (bin/break-away-loop) relaunches.
+// Record agent_done before exit so the old pid doesn't read as "died" after a clean restart.
 process.on('SIGUSR2', () => {
+  appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString(), status: 'ok', stop_reason: 'restart' });
   process.exit(RESTART_EXIT_CODE);
 });
 
@@ -170,16 +172,16 @@ function registryPath(): string {
 // Starts a 2s interval that reads the registry and prints state changes
 // for direct children (parent_pid === process.pid). Stderr only, all tiers.
 // Returns a stop function. The interval is unref'd so it won't keep the process alive.
-function startPoller(): () => void {
+function startPoller(renderCfg: RenderConfig): () => void {
   let prevStates = new Map<number, AgentState>();
 
   const tick = async () => {
     try {
       const records = await readRegistry(registryPath());
       const nextStates = deriveAgentStates(records);
-      const lines = diffAgentStates(prevStates, nextStates, process.pid);
-      for (const line of lines) {
-        process.stderr.write(line + '\n');
+      const transitions = diffAgentStates(prevStates, nextStates, process.pid);
+      for (const t of transitions) {
+        process.stderr.write(formatTransition(t, renderCfg));
       }
       prevStates = nextStates;
     } catch {
@@ -196,7 +198,7 @@ function startPoller(): () => void {
 
 // ── /agents REPL command ──────────────────────────────────────────────────────
 
-async function printAgentsTree(): Promise<void> {
+async function printAgentsTree(renderCfg: RenderConfig): Promise<void> {
   const records = await readRegistry(registryPath());
   const states = deriveAgentStates(records);
 
@@ -214,22 +216,35 @@ async function printAgentsTree(): Promise<void> {
 
   const ours = new Set([process.pid, ...descendants(process.pid)]);
 
-  // Print root (us) first.
-  const stateMarker = (s: AgentState['state']) => ({ running: '●', done: '✔', died: '✗' }[s]);
   const age = (ts: string) => {
     const ms = Date.now() - new Date(ts).getTime();
     return Math.round(ms / 1000) + 's';
   };
   const taskSnippet = (t: string) => (t.length > 60 ? t.slice(0, 57) + '…' : t);
 
+  // Colored state markers: running=CYAN ●, done=GREEN ✔ (YELLOW when error), died=RED ✗
+  function stateMarkerColored(s: AgentState): string {
+    if (s.state === 'running') {
+      return renderCfg.tty ? `\x1b[36m●\x1b[0m` : '●';
+    }
+    if (s.state === 'done') {
+      if (s.exitStatus === 'error') return renderCfg.tty ? `\x1b[33m✔\x1b[0m` : '✔';
+      return renderCfg.tty ? `\x1b[32m✔\x1b[0m` : '✔';
+    }
+    // died
+    return renderCfg.tty ? `\x1b[31m✗\x1b[0m` : '✗';
+  }
+
   // Walk depth-first from our pid.
   function printNode(pid: number, depth: number) {
     const s = states.get(pid);
     const indent = '  '.repeat(depth);
     if (pid === process.pid) {
-      process.stderr.write(`${indent}${stateMarker('running')} ${pid} (self)  ${taskSnippet(s?.task ?? 'repl')}\n`);
+      const marker = renderCfg.tty ? `\x1b[36m●\x1b[0m` : '●';
+      process.stderr.write(`${indent}${marker} ${pid} (self)  ${taskSnippet(s?.task ?? 'repl')}\n`);
     } else if (s) {
-      process.stderr.write(`${indent}${stateMarker(s.state)} ${pid}  ${s.state}  ${age(s.startTs)}  ${taskSnippet(s.task)}\n`);
+      const marker = stateMarkerColored(s);
+      process.stderr.write(`${indent}${marker} ${pid}  ${s.state}  ${age(s.startTs)}  ${taskSnippet(s.task)}\n`);
     }
     for (const [childPid, cs] of states) {
       if (cs.parentPid === pid) printNode(childPid, depth + 1);
@@ -276,7 +291,7 @@ async function runTask(
   await writeEvent(handle, startEvent);
   render(startEvent, renderCfg, (s) => process.stderr.write(s));
 
-  const stopPoller = startPoller();
+  const stopPoller = startPoller(renderCfg);
 
   const policy = {
     ...basePolicy,
@@ -298,8 +313,15 @@ async function runTask(
   await writeEvent(handle, doneEvent);
   render(doneEvent, renderCfg, (s) => process.stderr.write(s));
 
-  // agent_done registry record.
-  await appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString() });
+  // agent_done registry record with status derived from stop reason.
+  const agentDoneStatus: 'ok' | 'error' = (state.stopReason === 'error' || state.stopReason === 'aborted') ? 'error' : 'ok';
+  await appendRecord(registryPath(), {
+    event: 'agent_done',
+    pid: process.pid,
+    ts: new Date().toISOString(),
+    status: agentDoneStatus,
+    stop_reason: state.stopReason,
+  });
 
   // End-of-run summary: list still-running direct children.
   const records = await readRegistry(registryPath());
@@ -341,7 +363,7 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
 
   process.stderr.write('break-away repl — ctrl+D to exit\n');
 
-  const stopPoller = startPoller();
+  const stopPoller = startPoller(renderCfg);
 
   for await (const line of console) {
     const task = line.trim();
@@ -360,10 +382,11 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
       continue;
     }
     if (task === '/restart') {
+      appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString(), status: 'ok', stop_reason: 'restart' });
       process.exit(RESTART_EXIT_CODE);
     }
     if (task === '/agents') {
-      await printAgentsTree();
+      await printAgentsTree(renderCfg);
       process.stderr.write('> ');
       continue;
     }
@@ -405,7 +428,8 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
   }
 
   stopPoller();
-  await appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString() });
+  // Ctrl+D path: clean exit, status ok.
+  await appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString(), status: 'ok', stop_reason: 'done' });
   await closeTranscript(handle);
 }
 
