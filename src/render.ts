@@ -87,9 +87,31 @@ export function render(event: Record<string, unknown>, config: RenderConfig, wri
     }
 
     case 'tool_result': {
-      if (config.tier === 'quiet') return;
       const name = String(event.name ?? '');
       const result = String(event.result ?? '');
+
+      // spawn_agent success: first-class block shown in all tiers (it's signal).
+      if (name === 'spawn_agent' && result.startsWith('spawned child agent')) {
+        // Parse pid from first line "spawned child agent (pid <n>)"
+        const pidMatch = result.match(/pid (\d+)/);
+        const pid = pidMatch ? pidMatch[1] : '?';
+        // Parse out path from "results: read_file <path>"
+        const outMatch = result.match(/results: read_file (.+)/);
+        const outPath = outMatch ? outMatch[1] : '';
+        writer(`${BOLD(config)}◆ spawned agent ${pid}${RESET(config)}\n`);
+        if (config.tier !== 'quiet' && outPath) {
+          writer(`  ${DIM(config)}out: ${outPath}${RESET(config)}\n`);
+        }
+        if (config.tier === 'debug') {
+          const { text, elided } = snippet(result);
+          const indented = text.split('\n').map((l) => `  ${l}`).join('\n');
+          writer(`${DIM(config)}${indented}${RESET(config)}\n`);
+          if (elided) writer(`  ${DIM(config)}…${RESET(config)}\n`);
+        }
+        return;
+      }
+
+      if (config.tier === 'quiet') return;
       const truncated = !!event.truncated;
       const chars = event.chars as number;
       const { text, elided } = snippet(result);

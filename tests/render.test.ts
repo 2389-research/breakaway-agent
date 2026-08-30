@@ -181,6 +181,43 @@ describe('render — unknown events', () => {
   });
 });
 
+// ── spawn_agent tool_result special rendering ─────────────────────────────────
+
+describe('render — spawn_agent tool_result', () => {
+  const spawnSuccessResult = 'spawned child agent (pid 12345)\nresults: read_file /tmp/x.out\nerrors: read_file /tmp/x.err\ncheck alive: bash: kill -0 12345';
+
+  test('rich: renders spawn success as distinct block with pid', () => {
+    const out = collect({ event: 'tool_result', name: 'spawn_agent', chars: spawnSuccessResult.length, truncated: false, result: spawnSuccessResult }, RICH);
+    expect(out).toContain('spawned');
+    expect(out).toContain('12345');
+  });
+
+  test('quiet: still shows spawn success block (it is signal)', () => {
+    const out = collect({ event: 'tool_result', name: 'spawn_agent', chars: spawnSuccessResult.length, truncated: false, result: spawnSuccessResult }, QUIET);
+    expect(out).toContain('spawned');
+    expect(out).toContain('12345');
+  });
+
+  test('rich: spawn refusal renders normally (no special block)', () => {
+    const refusal = 'spawn refused: max agent depth 3 reached';
+    const out = collect({ event: 'tool_result', name: 'spawn_agent', chars: refusal.length, truncated: false, result: refusal }, RICH);
+    // Falls through to normal tool_result render — not a spawn success block
+    expect(out).not.toContain('◆ spawned');
+    expect(out).toContain('spawn_agent');
+  });
+
+  test('rich: spawn error renders normally', () => {
+    const err = 'error: failed to get child pid';
+    const out = collect({ event: 'tool_result', name: 'spawn_agent', chars: err.length, truncated: false, result: err }, RICH);
+    expect(out).not.toContain('◆ spawned');
+  });
+
+  test('debug: spawn success includes out path detail', () => {
+    const out = collect({ event: 'tool_result', name: 'spawn_agent', chars: spawnSuccessResult.length, truncated: false, result: spawnSuccessResult }, DEBUG);
+    expect(out).toContain('/tmp/x.out');
+  });
+});
+
 // ── ANSI / color gating ───────────────────────────────────────────────────────
 
 describe('render — color gating', () => {
