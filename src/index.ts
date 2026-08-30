@@ -12,6 +12,10 @@ import { resolve, join } from 'node:path';
 // Anchor paths before any chdir so they survive --cwd.
 const SOURCE_DIR = import.meta.dir;
 
+export function isEmbedded(): boolean {
+  return import.meta.dir.startsWith('/$bunfs/');
+}
+
 export const RESTART_EXIT_CODE = 42;
 
 // Exit with RESTART_EXIT_CODE on SIGUSR2 so the wrapper script (bin/break-away-loop) relaunches.

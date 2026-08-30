@@ -2,7 +2,7 @@
 // ABOUTME: Tests parseArgs exported from index.ts; no I/O, no network.
 
 import { describe, test, expect } from 'bun:test';
-import { parseArgs, loadSystemPrompt } from '../src/index.ts';
+import { parseArgs, loadSystemPrompt, isEmbedded } from '../src/index.ts';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -126,5 +126,12 @@ describe('loadSystemPrompt', () => {
     );
     expect(result.exitCode).toBe(1);
     expect(new TextDecoder().decode(result.stderr)).toContain('/nonexistent/path/sys.txt');
+  });
+});
+
+describe('isEmbedded', () => {
+  test('returns false when running from source', () => {
+    // In bun test, import.meta.dir is a real filesystem path
+    expect(isEmbedded()).toBe(false);
   });
 });
