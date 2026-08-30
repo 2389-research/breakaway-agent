@@ -85,11 +85,18 @@ Agent depth is tracked via `BREAK_AWAY_DEPTH` (default 0). `BREAK_AWAY_MAX_DEPTH
 
 **Agent registry:** every process records its spawn, start, and done events to `agents.jsonl` in the transcript directory. This gives a shared view of what's running across parent and child agents — even after the parent exits and pids get reparented to PID 1.
 
-**Live status polling:** while a run is active, a 2-second background poll watches for direct-child state changes and prints one line per transition to stderr:
-- `◆ agent <pid> done (<age>s)` — child finished normally
-- `✗ agent <pid> died (<age>s)` — child crashed without writing a done record
+**Boot verification:** after launching a child, `spawn_agent` waits 700ms and checks the pid is still alive. If the child died at boot, the error message fed back to the model includes the head of the `.err` file so the model can see what went wrong.
 
-**REPL `/agents` command:** prints a depth-indented tree of all agents descended from the current process, with state marker (●/✔/✗), age, and task snippet. Outsiders (live agents from other tree roots) are summarised at the bottom.
+**Live status polling:** while a run is active, a 2-second background poll watches for direct-child state changes and prints one line per transition to stderr (with color when the terminal supports it):
+- `◆ agent <pid> done (<age>s)` — child finished (green)
+- `◆ agent <pid> done (error: <reason>, <age>s)` — child finished with an error (yellow)
+- `✗ agent <pid> died (<age>s)` — child crashed without writing a done record (red)
+
+**Done records carry status:** `agent_done` in the registry includes `status` (`ok` or `error`) and `stop_reason` (the `FinalState.stopReason` value). Clean restarts (`/restart`, `SIGUSR2`) also record `agent_done` with `status:ok, stop_reason:restart` so they don't read as "died" after relaunch.
+
+**REPL `/agents` command:** prints a depth-indented tree of all agents descended from the current process, with state marker (● CYAN running / ✔ GREEN done / ✔ YELLOW done-error / ✗ RED died), age, and task snippet. Outsiders (live agents from other tree roots) are summarised at the bottom.
+
+**Self-serve child status:** the spawn result now ends with `status: read_file <registryPath>` instead of a shell command, so the parent model can check child status with a plain `read_file` call.
 
 Each child's `.err` file is its own live TUI stream — follow it with:
 ```sh
