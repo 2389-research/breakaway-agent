@@ -3,9 +3,9 @@
 
 import type { Tool } from './types.ts';
 import { join, resolve } from 'node:path';
+import { defaultTranscriptDir } from './transcript.ts';
 
 const TOOLS_SOURCE_DIR = import.meta.dir;
-const DEFAULT_SPAWN_TRANSCRIPT_DIR = resolve(TOOLS_SOURCE_DIR, '../.transcripts');
 
 export type SpawnArgsSuccess = { cmd: string; outFile: string; errFile: string };
 export type SpawnArgsError = { error: string };
@@ -18,6 +18,8 @@ export function buildSpawnArgs(params: {
   maxDepth: number;
   ts: string;
   indexPath: string;
+  embedded: boolean;
+  execPath: string;
 }): SpawnArgsSuccess | SpawnArgsError {
   if (params.depth >= params.maxDepth) {
     return { error: `spawn refused: max agent depth ${params.maxDepth} reached` };
@@ -27,7 +29,10 @@ export function buildSpawnArgs(params: {
   const errFile = resolve(params.transcriptDir, `spawn-${slug}.err`);
 
   const esc = (s: string) => s.replace(/'/g, `'\\''`);
-  const cmd = `nohup bun '${esc(params.indexPath)}' --cwd '${esc(params.cwd)}' '${esc(params.task)}' >'${esc(outFile)}' 2>'${esc(errFile)}' & echo $!`;
+  const agentCmd = params.embedded
+    ? `'${esc(params.execPath)}'`
+    : `bun '${esc(params.indexPath)}'`;
+  const cmd = `nohup ${agentCmd} --cwd '${esc(params.cwd)}' '${esc(params.task)}' >'${esc(outFile)}' 2>'${esc(errFile)}' & echo $!`;
   return { cmd, outFile, errFile };
 }
 
@@ -173,11 +178,12 @@ const spawnAgent: Tool = {
     const taskCwd = (args['cwd'] as string | undefined) ?? process.cwd();
     const depth = Number(process.env.BREAK_AWAY_DEPTH ?? '0');
     const maxDepth = Number(process.env.BREAK_AWAY_MAX_DEPTH ?? '3');
-    const transcriptDir = process.env.BREAK_AWAY_TRANSCRIPT_DIR ?? DEFAULT_SPAWN_TRANSCRIPT_DIR;
+    const transcriptDir = defaultTranscriptDir(TOOLS_SOURCE_DIR);
     const indexPath = resolve(TOOLS_SOURCE_DIR, 'index.ts');
     const ts = new Date().toISOString();
 
-    const result = buildSpawnArgs({ task, cwd: taskCwd, transcriptDir, depth, maxDepth, ts, indexPath });
+    const embedded = TOOLS_SOURCE_DIR.startsWith('/$bunfs/');
+    const result = buildSpawnArgs({ task, cwd: taskCwd, transcriptDir, depth, maxDepth, ts, indexPath, embedded, execPath: process.execPath });
     if ('error' in result) return result.error;
 
     try {

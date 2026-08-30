@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
+    "build": "bun build --compile src/index.ts --outfile break-away",
     "test": "bun test"
   },
   "dependencies": {

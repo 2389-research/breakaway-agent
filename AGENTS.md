@@ -54,6 +54,14 @@ Relaunches break-away on exit code 42 (`RESTART_EXIT_CODE`), up to `BREAK_AWAY_M
 
 Launches a detached child agent via `nohup bun src/index.ts ... &`. Child survives parent exit. Depth-guarded: `BREAK_AWAY_DEPTH` tracks nesting; `BREAK_AWAY_MAX_DEPTH` (default 3) sets the cap. Results go to `spawn-<ts>.out`/`.err` in the transcript directory.
 
+## Binary mode (`bun run build`)
+
+Running `bun run build` compiles to a `./break-away` binary. The binary is ignored by git. In binary mode:
+- Transcripts go to `~/.break-away/transcripts/` (env var still wins).
+- Subagents (`spawn_agent`) launch the binary itself via `process.execPath`.
+- The system prompt is bundled at build time; `--system <path>` still overrides at runtime.
+- `SIGHUP` / `/reload` warn that reload is unavailable — rebuild instead.
+
 ## Hard rules
 
 - `.env` holds a live lunaroute key. NEVER commit it, never print it.

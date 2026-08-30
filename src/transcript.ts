@@ -3,7 +3,14 @@
 
 import { mkdirSync, createWriteStream } from 'node:fs';
 import type { WriteStream } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+
+export function defaultTranscriptDir(sourceDir: string): string {
+  if (process.env.BREAK_AWAY_TRANSCRIPT_DIR) return process.env.BREAK_AWAY_TRANSCRIPT_DIR;
+  if (sourceDir.startsWith('/$bunfs/')) return join(homedir(), '.break-away', 'transcripts');
+  return resolve(sourceDir, '../.transcripts');
+}
 
 export type TranscriptHandle = WriteStream | null;
 

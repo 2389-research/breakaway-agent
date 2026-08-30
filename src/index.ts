@@ -5,12 +5,17 @@ import { run, setVerbose } from './agent.ts';
 import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
 import type { Message, FinalState, Policy, Tool } from './types.ts';
-import { openTranscript, writeEvent, closeTranscript } from './transcript.ts';
+import { openTranscript, writeEvent, closeTranscript, defaultTranscriptDir } from './transcript.ts';
+import defaultSystemText from '../system.txt' with { type: 'text' };
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 // Anchor paths before any chdir so they survive --cwd.
 const SOURCE_DIR = import.meta.dir;
+
+export function isEmbedded(): boolean {
+  return import.meta.dir.startsWith('/$bunfs/');
+}
 
 export const RESTART_EXIT_CODE = 42;
 
@@ -19,7 +24,6 @@ process.on('SIGUSR2', () => {
   process.exit(RESTART_EXIT_CODE);
 });
 
-const DEFAULT_TRANSCRIPT_DIR = resolve(SOURCE_DIR, '../.transcripts');
 const DEFAULT_SYSTEM_PATH = join(SOURCE_DIR, '../system.txt');
 
 // Mutable refs updated by doReload; runTask/repl read from here so hot-reload takes effect.
@@ -54,6 +58,10 @@ export async function doReload(toolsPath: string, policyPath: string, systemPath
 // main() re-registers with the actual systemPath after parsing args.
 let _sighupSystemPath = DEFAULT_SYSTEM_PATH;
 process.on('SIGHUP', () => {
+  if (isEmbedded()) {
+    process.stderr.write('[reload] compiled binary — reload unavailable; rebuild instead\n');
+    return;
+  }
   doReload(resolve(SOURCE_DIR, 'tools.ts'), resolve(SOURCE_DIR, 'policy.ts'), _sighupSystemPath);
 });
 
@@ -126,21 +134,18 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { task, systemPath, verbose, model, cwd, maxTurns, help, unknownFlag };
 }
 
-const FALLBACK_SYSTEM_PROMPT =
-  'You are a code agent. Work step by step. Use tools to read, write, and run code. Report what you did when done.';
-
 export function loadSystemPrompt(path: string, isDefault: boolean): string {
   try {
     return readFileSync(path, 'utf8').trim();
   } catch (err) {
-    if (isDefault) return FALLBACK_SYSTEM_PROMPT;
+    if (isDefault) return defaultSystemText.trim();
     process.stderr.write(`error: cannot read system prompt: ${path}: ${err}\n`);
     process.exit(1);
   }
 }
 
 function transcriptDir(): string {
-  return process.env.BREAK_AWAY_TRANSCRIPT_DIR ?? DEFAULT_TRANSCRIPT_DIR;
+  return defaultTranscriptDir(SOURCE_DIR);
 }
 
 async function runTask(
