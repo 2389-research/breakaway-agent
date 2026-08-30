@@ -1,7 +1,9 @@
-// ABOUTME: Tool registry — read_file, write_file, edit_file, bash, restart_self. Each tool has a definition and handler.
+// ABOUTME: Tool registry — read_file, list_dir, write_file, edit_file, bash, restart_self. Each tool has a definition and handler.
 // ABOUTME: Output capped at 8000 chars; bash captures stdout, stderr, and exit code.
 
 import type { Tool } from './types.ts';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 
 const OUTPUT_CAP = 8000;
 
@@ -60,6 +62,48 @@ const writeFile: Tool = {
     try {
       await Bun.write(filePath, content);
       return `wrote ${content.length} bytes to ${filePath}`;
+    } catch (err) {
+      return `error: ${String(err)}`;
+    }
+  },
+};
+
+const listDir: Tool = {
+  definition: {
+    type: 'function',
+    function: {
+      name: 'list_dir',
+      description: 'List the entries of a directory. Returns names, types (file/dir), and byte sizes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Directory path. Defaults to the current directory.' },
+        },
+        required: [],
+      },
+    },
+  },
+  async handler(args) {
+    const dirPath = (args['path'] as string | undefined) ?? '.';
+    try {
+      const entries = Array.from(new Bun.Glob('*').scanSync({
+        cwd: dirPath,
+        dot: true,
+        onlyFiles: false,
+      })).filter((name) => name !== '.' && name !== '..');
+      if (entries.length === 0) return `(empty directory: ${dirPath})`;
+      const lines = entries.sort().map((name) => {
+        const full = join(dirPath, name);
+        try {
+          const st = statSync(full);
+          return st.isDirectory()
+            ? `dir  ${name}/`
+            : `file ${name} (${st.size}b)`;
+        } catch {
+          return `?    ${name}`;
+        }
+      });
+      return cap(`${dirPath}\n` + lines.join('\n'));
     } catch (err) {
       return `error: ${String(err)}`;
     }
@@ -218,4 +262,4 @@ const restartSelf: Tool = {
   },
 };
 
-export const tools: Tool[] = [readFile, writeFile, editFile, bash, restartSelf];
+export const tools: Tool[] = [readFile, listDir, writeFile, editFile, bash, restartSelf];

@@ -4,7 +4,7 @@
 import { run, setVerbose } from './agent.ts';
 import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
-import type { Message, FinalState } from './types.ts';
+import type { Message, FinalState, Policy } from './types.ts';
 import { openTranscript, writeEvent, closeTranscript } from './transcript.ts';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -28,6 +28,7 @@ Options:
   --cwd <path>     Change working directory before running tools.
   --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL).
   --system <path>  Path to system prompt file (default: system.txt).
+  --max-turns <n>  Override the loop turn budget (default: policy's maxTurns).
   --verbose        Print model reasoning (if supported by provider).
   --help           Print this help and exit.
 `.trim();
@@ -38,6 +39,7 @@ export type ParsedArgs = {
   verbose: boolean;
   model: string | null;
   cwd: string | null;
+  maxTurns: number | null;
   help: boolean;
   unknownFlag: string | null;
 };
@@ -48,6 +50,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let verbose = false;
   let model: string | null = null;
   let cwd: string | null = null;
+  let maxTurns: number | null = null;
   let help = false;
   let unknownFlag: string | null = null;
 
@@ -63,6 +66,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
       model = args[++i];
     } else if (args[i] === '--cwd' && args[i + 1]) {
       cwd = args[++i];
+    } else if (args[i] === '--max-turns' && args[i + 1]) {
+      const n = Number(args[++i]);
+      if (!Number.isInteger(n) || n < 1) {
+        unknownFlag = `--max-turns (invalid value: ${args[i]})`;
+      } else {
+        maxTurns = n;
+      }
     } else if (args[i].startsWith('--')) {
       unknownFlag = args[i];
     } else {
@@ -70,7 +80,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { task, systemPath, verbose, model, cwd, help, unknownFlag };
+  return { task, systemPath, verbose, model, cwd, maxTurns, help, unknownFlag };
 }
 
 function loadSystemPrompt(path: string): string {
@@ -89,6 +99,7 @@ async function runTask(
   task: string,
   systemPrompt: string,
   model: string | null,
+  basePolicy: Policy = defaultPolicy,
 ): Promise<FinalState> {
   const messages: Message[] = [
     { role: 'system', content: systemPrompt },
@@ -103,7 +114,7 @@ async function runTask(
     cwd: process.cwd(),
   });
 
-  const policy = { ...defaultPolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
+  const policy = { ...basePolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
   const state = await run(messages, tools, policy, model);
 
   await writeEvent(handle, {
@@ -117,7 +128,7 @@ async function runTask(
   return state;
 }
 
-async function repl(systemPrompt: string, model: string | null): Promise<void> {
+async function repl(systemPrompt: string, model: string | null, basePolicy: Policy = defaultPolicy): Promise<void> {
   const messages: Message[] = [{ role: 'system', content: systemPrompt }];
 
   const handle = await openTranscript(transcriptDir());
@@ -139,7 +150,7 @@ async function repl(systemPrompt: string, model: string | null): Promise<void> {
 
     messages.push({ role: 'user', content: task });
 
-    const replPolicy = { ...defaultPolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
+    const replPolicy = { ...basePolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
     const state = await run(messages, tools, replPolicy, model);
 
     // Append the assistant's final reply to messages for continuity
@@ -170,7 +181,7 @@ async function repl(systemPrompt: string, model: string | null): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { task, systemPath, verbose, model, cwd, help, unknownFlag } = parseArgs(process.argv);
+  const { task, systemPath, verbose, model, cwd, maxTurns, help, unknownFlag } = parseArgs(process.argv);
 
   if (unknownFlag) {
     process.stderr.write(`error: unknown flag: ${unknownFlag}\n\n${USAGE}\n`);
@@ -194,9 +205,10 @@ async function main(): Promise<void> {
   }
 
   const systemPrompt = loadSystemPrompt(systemPath);
+  const policy = maxTurns !== null ? { ...defaultPolicy, maxTurns } : defaultPolicy;
 
   if (task) {
-    const state = await runTask(task, systemPrompt, model);
+    const state = await runTask(task, systemPrompt, model, policy);
     const lastMsg = state.messages[state.messages.length - 1];
     if (lastMsg && lastMsg.content) {
       process.stdout.write(lastMsg.content + '\n');
@@ -204,7 +216,7 @@ async function main(): Promise<void> {
     // Stats to stderr only
     process.stderr.write(formatStats(state) + '\n');
   } else {
-    await repl(systemPrompt, model);
+    await repl(systemPrompt, model, policy);
   }
 }
 

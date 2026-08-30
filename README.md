@@ -31,6 +31,7 @@ bun src/index.ts
 --cwd <path>     Change working directory before running tools
 --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL)
 --system <path>  Path to system prompt file (default: system.txt)
+--max-turns <n>  Override the loop turn budget (default: policy's maxTurns)
 --verbose        Print model reasoning (if supported by provider)
 --help           Print this help and exit
 ```

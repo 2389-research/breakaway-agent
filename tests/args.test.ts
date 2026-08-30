@@ -70,3 +70,27 @@ describe('parseArgs — --help and unknown flags', () => {
     expect(result.unknownFlag).toBe('--blorp');
   });
 });
+
+describe('parseArgs — --max-turns', () => {
+  test('parses a valid integer', () => {
+    const result = parseArgs(args('--max-turns', '7', 'task'));
+    expect(result.maxTurns).toBe(7);
+    expect(result.task).toBe('task');
+  });
+
+  test('defaults to null when flag absent', () => {
+    const result = parseArgs(args('task'));
+    expect(result.maxTurns).toBeNull();
+  });
+
+  test('rejects non-integer values as unknownFlag', () => {
+    const result = parseArgs(args('--max-turns', 'abc'));
+    expect(result.maxTurns).toBeNull();
+    expect(result.unknownFlag).toMatch(/max-turns/);
+  });
+
+  test('rejects zero and negatives as unknownFlag', () => {
+    expect(parseArgs(args('--max-turns', '0')).unknownFlag).toMatch(/max-turns/);
+    expect(parseArgs(args('--max-turns', '-3')).unknownFlag).toMatch(/max-turns/);
+  });
+});

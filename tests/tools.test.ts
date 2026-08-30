@@ -4,7 +4,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { tools } from '../src/tools.ts';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 function findTool(name: string) {
@@ -217,6 +217,45 @@ describe('edit_file handler', () => {
   test('returns error string for missing file (no throw)', async () => {
     const tool = findTool('edit_file')!;
     const result = await tool.handler({ path: join(tmpDir, 'nonexistent.txt'), old_string: 'a', new_string: 'b' });
+    expect(result).toMatch(/error/i);
+  });
+});
+
+describe('list_dir handler', () => {
+  test('has list_dir tool', () => {
+    expect(findTool('list_dir')).toBeDefined();
+  });
+
+  test('definition has no required args (path optional)', () => {
+    const def = findTool('list_dir')!.definition;
+    expect((def.function.parameters as { required?: string[] }).required ?? []).toEqual([]);
+  });
+
+  test('lists files with sizes and dirs with trailing slash', async () => {
+    await Bun.write(join(tmpDir, 'a.txt'), 'hello');
+    mkdirSync(join(tmpDir, 'sub'));
+    const result = await findTool('list_dir')!.handler({ path: tmpDir });
+    expect(result).toContain('a.txt');
+    expect(result).toMatch(/a\.txt \(5b\)/);
+    expect(result).toContain('sub/');
+    expect(result).toMatch(/^dir  sub\//m);
+    expect(result).toMatch(/^file a\.txt \(5b\)/m);
+  });
+
+  test('defaults to current directory', async () => {
+    const result = await findTool('list_dir')!.handler({});
+    expect(typeof result).toBe('string');
+    expect(result.length).toBeGreaterThan(0);
+    expect(result).not.toMatch(/error/i);
+  });
+
+  test('reports empty directory', async () => {
+    const result = await findTool('list_dir')!.handler({ path: tmpDir });
+    expect(result).toMatch(/empty directory/);
+  });
+
+  test('returns error string for missing dir (no throw)', async () => {
+    const result = await findTool('list_dir')!.handler({ path: join(tmpDir, 'nope') });
     expect(result).toMatch(/error/i);
   });
 });
