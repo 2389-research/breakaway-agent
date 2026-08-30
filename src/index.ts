@@ -103,7 +103,8 @@ async function runTask(
     cwd: process.cwd(),
   });
 
-  const state = await run(messages, tools, defaultPolicy, model);
+  const policy = { ...defaultPolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
+  const state = await run(messages, tools, policy, model);
 
   await writeEvent(handle, {
     event: 'done',
@@ -138,7 +139,8 @@ async function repl(systemPrompt: string, model: string | null): Promise<void> {
 
     messages.push({ role: 'user', content: task });
 
-    const state = await run(messages, tools, defaultPolicy, model);
+    const replPolicy = { ...defaultPolicy, onEvent: (e: Record<string, unknown>) => writeEvent(handle, e) };
+    const state = await run(messages, tools, replPolicy, model);
 
     // Append the assistant's final reply to messages for continuity
     const lastAssistant = [...state.messages].reverse().find((m) => m.role === 'assistant');

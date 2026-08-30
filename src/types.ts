@@ -37,6 +37,7 @@ export type Policy = {
   onToolError: 'retry' | 'abort' | 'nudge';
   contextStrategy: (messages: Message[]) => Message[];
   shouldContinue: (lastMessage: Message) => boolean;
+  onEvent?: (event: Record<string, unknown>) => void;
 };
 
 export type FinalState = {

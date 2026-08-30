@@ -250,3 +250,72 @@ describe('agent run — contextStrategy', () => {
     expect(called).toBe(2);
   });
 });
+
+describe('agent run — onEvent observer', () => {
+  test('collects assistant, tool_call, tool_result, assistant events for a scripted exchange', async () => {
+    // Turn 1: assistant calls a tool
+    mockChat.mockResolvedValueOnce({
+      message: {
+        role: 'assistant',
+        content: 'let me check',
+        tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'my_tool', arguments: '{"x":1}' } }],
+      },
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      finish_reason: 'tool_calls',
+    });
+    // Turn 2: done
+    mockChat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'all done' },
+      usage: { prompt_tokens: 15, completion_tokens: 5, total_tokens: 20 },
+      finish_reason: 'stop',
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const policy = makePolicy({
+      onEvent: (e) => events.push(e),
+    });
+
+    await run(initialMessages(), [makeTool('my_tool', async () => 'tool output')], policy);
+
+    // Expect: assistant (with tool_calls) → tool_call → tool_result → assistant (final)
+    expect(events.length).toBe(4);
+
+    const [ev0, ev1, ev2, ev3] = events;
+
+    expect(ev0.event).toBe('assistant');
+    expect(ev0.content).toBe('let me check');
+    expect(Array.isArray(ev0.tool_calls)).toBe(true);
+    const tc0 = (ev0.tool_calls as Array<{ name: string; args_chars: number }>)[0];
+    expect(tc0.name).toBe('my_tool');
+    expect(tc0.args_chars).toBe('{"x":1}'.length);
+
+    expect(ev1.event).toBe('tool_call');
+    expect(ev1.name).toBe('my_tool');
+    expect((ev1.args as Record<string, unknown>).x).toBe(1);
+
+    expect(ev2.event).toBe('tool_result');
+    expect(ev2.name).toBe('my_tool');
+    expect(ev2.chars).toBe('tool output'.length);
+    expect(ev2.truncated).toBe(false);
+
+    expect(ev3.event).toBe('assistant');
+    expect(ev3.content).toBe('all done');
+    expect(Array.isArray(ev3.tool_calls)).toBe(true);
+    expect((ev3.tool_calls as unknown[]).length).toBe(0);
+  });
+
+  test('a throwing onEvent observer does not crash the run', async () => {
+    mockChat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'fine' },
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      finish_reason: 'stop',
+    });
+
+    const policy = makePolicy({
+      onEvent: () => { throw new Error('observer explodes'); },
+    });
+
+    const state = await run(initialMessages(), [], policy);
+    expect(state.stopReason).toBe('done');
+  });
+});

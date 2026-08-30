@@ -4,6 +4,15 @@
 import { chat } from './client.ts';
 import type { Message, Tool, Policy, FinalState, ToolCall } from './types.ts';
 
+function emitEvent(policy: Policy, event: Record<string, unknown>): void {
+  if (!policy.onEvent) return;
+  try {
+    policy.onEvent(event);
+  } catch {
+    // best-effort — observer errors must not kill the loop
+  }
+}
+
 let verbose = false;
 
 export function setVerbose(v: boolean): void {
@@ -90,11 +99,26 @@ export async function run(
 
     const finishReason = response.finish_reason;
 
+    emitEvent(policy, {
+      event: 'assistant',
+      content: response.message.content ?? '',
+      tool_calls: (response.message.tool_calls ?? []).map((tc) => ({
+        name: tc.function.name,
+        args_chars: tc.function.arguments.length,
+      })),
+    });
+
     if (finishReason === 'tool_calls' || response.message.tool_calls?.length) {
       const tcs = response.message.tool_calls ?? [];
 
       for (const tc of tcs) {
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(tc.function.arguments); } catch { /* keep empty */ }
+        emitEvent(policy, { event: 'tool_call', name: tc.function.name, args });
+
         const { result, isError } = await executeToolCall(tc, tools);
+        const truncated = result.startsWith('[truncated:');
+        emitEvent(policy, { event: 'tool_result', name: tc.function.name, chars: result.length, truncated });
 
         const isKnownTool = !!tools.find((t) => t.definition.function.name === tc.function.name);
         if (isError && isKnownTool) {
@@ -112,6 +136,7 @@ export async function run(
             // Retry once
             process.stderr.write(`[tool] retrying ${tc.function.name}...\n`);
             const retry = await executeToolCall(tc, tools);
+            emitEvent(policy, { event: 'tool_result', name: tc.function.name, chars: retry.result.length, truncated: retry.result.startsWith('[truncated:') });
             allMessages.push(toolResultMessage(tc, retry.result));
           } else if (policy.onToolError === 'nudge') {
             allMessages.push(toolResultMessage(tc, result));
