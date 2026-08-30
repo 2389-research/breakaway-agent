@@ -3,9 +3,9 @@
 
 import type { Tool } from './types.ts';
 import { join, resolve } from 'node:path';
+import { defaultTranscriptDir } from './transcript.ts';
 
 const TOOLS_SOURCE_DIR = import.meta.dir;
-const DEFAULT_SPAWN_TRANSCRIPT_DIR = resolve(TOOLS_SOURCE_DIR, '../.transcripts');
 
 export type SpawnArgsSuccess = { cmd: string; outFile: string; errFile: string };
 export type SpawnArgsError = { error: string };
@@ -173,7 +173,7 @@ const spawnAgent: Tool = {
     const taskCwd = (args['cwd'] as string | undefined) ?? process.cwd();
     const depth = Number(process.env.BREAK_AWAY_DEPTH ?? '0');
     const maxDepth = Number(process.env.BREAK_AWAY_MAX_DEPTH ?? '3');
-    const transcriptDir = process.env.BREAK_AWAY_TRANSCRIPT_DIR ?? DEFAULT_SPAWN_TRANSCRIPT_DIR;
+    const transcriptDir = defaultTranscriptDir(TOOLS_SOURCE_DIR);
     const indexPath = resolve(TOOLS_SOURCE_DIR, 'index.ts');
     const ts = new Date().toISOString();
 

@@ -5,7 +5,7 @@ import { run, setVerbose } from './agent.ts';
 import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
 import type { Message, FinalState, Policy, Tool } from './types.ts';
-import { openTranscript, writeEvent, closeTranscript } from './transcript.ts';
+import { openTranscript, writeEvent, closeTranscript, defaultTranscriptDir } from './transcript.ts';
 import defaultSystemText from '../system.txt' with { type: 'text' };
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -24,7 +24,6 @@ process.on('SIGUSR2', () => {
   process.exit(RESTART_EXIT_CODE);
 });
 
-const DEFAULT_TRANSCRIPT_DIR = resolve(SOURCE_DIR, '../.transcripts');
 const DEFAULT_SYSTEM_PATH = join(SOURCE_DIR, '../system.txt');
 
 // Mutable refs updated by doReload; runTask/repl read from here so hot-reload takes effect.
@@ -146,7 +145,7 @@ export function loadSystemPrompt(path: string, isDefault: boolean): string {
 }
 
 function transcriptDir(): string {
-  return process.env.BREAK_AWAY_TRANSCRIPT_DIR ?? DEFAULT_TRANSCRIPT_DIR;
+  return defaultTranscriptDir(SOURCE_DIR);
 }
 
 async function runTask(
