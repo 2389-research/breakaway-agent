@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# ABOUTME: Restart wrapper for break-away — relaunches on exit code 42 up to MAX_RESTARTS times.
+# ABOUTME: Any other exit code passes through. BREAK_AWAY_CMD overrides the command (tests).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAX_RESTARTS="${BREAK_AWAY_MAX_RESTARTS:-20}"
+restarts=0
+
+run_agent() {
+  if [ -n "${BREAK_AWAY_CMD:-}" ]; then
+    $BREAK_AWAY_CMD "$@"
+  else
+    bun "$SCRIPT_DIR/../src/index.ts" "$@"
+  fi
+}
+
+while true; do
+  code=0
+  run_agent "$@" || code=$?
+  if [ "$code" -ne 42 ]; then
+    exit "$code"
+  fi
+  restarts=$((restarts + 1))
+  if [ "$restarts" -ge "$MAX_RESTARTS" ]; then
+    printf '[break-away-loop] restart cap reached (%d); refusing to restart\n' "$MAX_RESTARTS" >&2
+    exit 1
+  fi
+  printf '[break-away-loop] restarting (attempt %d/%d)...\n' "$restarts" "$MAX_RESTARTS" >&2
+done
