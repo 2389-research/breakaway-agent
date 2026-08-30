@@ -7,6 +7,7 @@ import { defaultPolicy } from './policy.ts';
 import type { Message, FinalState, Policy, Tool } from './types.ts';
 import { openTranscript, writeEvent, closeTranscript, defaultTranscriptDir } from './transcript.ts';
 import { render, buildRenderConfig, type Tier } from './render.ts';
+import { appendRecord, readRegistry, deriveAgentStates, diffAgentStates, type AgentState } from './registry.ts';
 import defaultSystemText from '../system.txt' with { type: 'text' };
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -160,6 +161,97 @@ function transcriptDir(): string {
   return defaultTranscriptDir(SOURCE_DIR);
 }
 
+function registryPath(): string {
+  return join(transcriptDir(), 'agents.jsonl');
+}
+
+// ── Poller ────────────────────────────────────────────────────────────────────
+
+// Starts a 2s interval that reads the registry and prints state changes
+// for direct children (parent_pid === process.pid). Stderr only, all tiers.
+// Returns a stop function. The interval is unref'd so it won't keep the process alive.
+function startPoller(): () => void {
+  let prevStates = new Map<number, AgentState>();
+
+  const tick = async () => {
+    try {
+      const records = await readRegistry(registryPath());
+      const nextStates = deriveAgentStates(records);
+      const lines = diffAgentStates(prevStates, nextStates, process.pid);
+      for (const line of lines) {
+        process.stderr.write(line + '\n');
+      }
+      prevStates = nextStates;
+    } catch {
+      // best-effort — swallow
+    }
+  };
+
+  const handle = setInterval(tick, 2000);
+  // Bun supports unref() — verified below; prevents timer from keeping process alive.
+  if (typeof handle.unref === 'function') handle.unref();
+
+  return () => clearInterval(handle);
+}
+
+// ── /agents REPL command ──────────────────────────────────────────────────────
+
+async function printAgentsTree(): Promise<void> {
+  const records = await readRegistry(registryPath());
+  const states = deriveAgentStates(records);
+
+  // Build full descendant tree rooted at our pid.
+  function descendants(pid: number): number[] {
+    const result: number[] = [];
+    for (const [p, s] of states) {
+      if (s.parentPid === pid) {
+        result.push(p);
+        result.push(...descendants(p));
+      }
+    }
+    return result;
+  }
+
+  const ours = new Set([process.pid, ...descendants(process.pid)]);
+
+  // Print root (us) first.
+  const stateMarker = (s: AgentState['state']) => ({ running: '●', done: '✔', died: '✗' }[s]);
+  const age = (ts: string) => {
+    const ms = Date.now() - new Date(ts).getTime();
+    return Math.round(ms / 1000) + 's';
+  };
+  const taskSnippet = (t: string) => (t.length > 60 ? t.slice(0, 57) + '…' : t);
+
+  // Walk depth-first from our pid.
+  function printNode(pid: number, depth: number) {
+    const s = states.get(pid);
+    const indent = '  '.repeat(depth);
+    if (pid === process.pid) {
+      process.stderr.write(`${indent}${stateMarker('running')} ${pid} (self)  ${taskSnippet(s?.task ?? 'repl')}\n`);
+    } else if (s) {
+      process.stderr.write(`${indent}${stateMarker(s.state)} ${pid}  ${s.state}  ${age(s.startTs)}  ${taskSnippet(s.task)}\n`);
+    }
+    for (const [childPid, cs] of states) {
+      if (cs.parentPid === pid) printNode(childPid, depth + 1);
+    }
+  }
+
+  // Check if our self entry exists (it should from agent_start at boot).
+  if (!states.has(process.pid)) {
+    process.stderr.write(`(self not yet registered in registry)\n`);
+  }
+  printNode(process.pid, 0);
+
+  // Count live agents outside our tree.
+  let outsiders = 0;
+  for (const [pid, s] of states) {
+    if (!ours.has(pid) && s.state === 'running') outsiders++;
+  }
+  if (outsiders > 0) {
+    process.stderr.write(`other live agents in registry: ${outsiders}\n`);
+  }
+}
+
 async function runTask(
   task: string,
   systemPrompt: string,
@@ -184,6 +276,8 @@ async function runTask(
   await writeEvent(handle, startEvent);
   render(startEvent, renderCfg, (s) => process.stderr.write(s));
 
+  const stopPoller = startPoller();
+
   const policy = {
     ...basePolicy,
     onEvent: (e: Record<string, unknown>) => {
@@ -193,6 +287,8 @@ async function runTask(
   };
   const state = await run(messages, currentRefs.tools, policy, model);
 
+  stopPoller();
+
   const doneEvent = {
     event: 'done',
     turns: state.turns,
@@ -201,6 +297,28 @@ async function runTask(
   };
   await writeEvent(handle, doneEvent);
   render(doneEvent, renderCfg, (s) => process.stderr.write(s));
+
+  // agent_done registry record.
+  await appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString() });
+
+  // End-of-run summary: list still-running direct children.
+  const records = await readRegistry(registryPath());
+  const states = deriveAgentStates(records);
+  const stillRunning: AgentState[] = [];
+  for (const s of states.values()) {
+    if (s.parentPid === process.pid && s.state === 'running') {
+      stillRunning.push(s);
+    }
+  }
+  if (stillRunning.length > 0) {
+    const noun = stillRunning.length === 1 ? 'child still running' : 'children still running';
+    process.stderr.write(`${stillRunning.length} ${noun}:\n`);
+    for (const s of stillRunning) {
+      const errLine = s.errFile ? `  tail -f ${s.errFile}` : '';
+      process.stderr.write(`  pid ${s.pid}${errLine}\n`);
+    }
+  }
+
   await closeTranscript(handle);
 
   return state;
@@ -223,6 +341,8 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
 
   process.stderr.write('break-away repl — ctrl+D to exit\n');
 
+  const stopPoller = startPoller();
+
   for await (const line of console) {
     const task = line.trim();
     if (!task) {
@@ -241,6 +361,11 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
     }
     if (task === '/restart') {
       process.exit(RESTART_EXIT_CODE);
+    }
+    if (task === '/agents') {
+      await printAgentsTree();
+      process.stderr.write('> ');
+      continue;
     }
 
     messages.push({ role: 'user', content: task });
@@ -279,6 +404,8 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
     process.stderr.write('> ');
   }
 
+  stopPoller();
+  await appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString() });
   await closeTranscript(handle);
 }
 
@@ -312,6 +439,19 @@ async function main(): Promise<void> {
 
   // Update the SIGHUP handler's systemPath now that we know it.
   _sighupSystemPath = systemPath;
+
+  // Record boot in the shared registry.
+  const parentPidEnv = process.env.BREAK_AWAY_PARENT_PID;
+  const parentPidVal = parentPidEnv ? Number(parentPidEnv) : null;
+  await appendRecord(registryPath(), {
+    event: 'agent_start',
+    pid: process.pid,
+    parent_pid: parentPidVal,
+    depth: Number(process.env.BREAK_AWAY_DEPTH ?? '0'),
+    task: task ?? 'repl',
+    cwd: process.cwd(),
+    ts: new Date().toISOString(),
+  });
 
   if (task) {
     const state = await runTask(task, systemPrompt, model, tier, policy);

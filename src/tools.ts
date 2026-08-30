@@ -4,6 +4,7 @@
 import type { Tool } from './types.ts';
 import { join, resolve } from 'node:path';
 import { defaultTranscriptDir } from './transcript.ts';
+import { appendRecord } from './registry.ts';
 
 const TOOLS_SOURCE_DIR = import.meta.dir;
 
@@ -190,11 +191,27 @@ const spawnAgent: Tool = {
       const proc = Bun.spawn(['bash', '-c', result.cmd], {
         stdout: 'pipe',
         stderr: 'pipe',
-        env: { ...process.env, BREAK_AWAY_DEPTH: String(depth + 1) },
+        env: {
+          ...process.env,
+          BREAK_AWAY_DEPTH: String(depth + 1),
+          BREAK_AWAY_PARENT_PID: String(process.pid),
+        },
       });
       const pidStr = (await new Response(proc.stdout).text()).trim();
       const pid = parseInt(pidStr, 10);
       if (!pid || isNaN(pid)) return `error: failed to get child pid (got: ${pidStr})`;
+
+      // Record the spawn in the shared registry (best-effort).
+      await appendRecord(resolve(transcriptDir, 'agents.jsonl'), {
+        event: 'agent_spawn',
+        pid,
+        parent_pid: process.pid,
+        task,
+        out: result.outFile,
+        err: result.errFile,
+        ts: new Date().toISOString(),
+      });
+
       return `spawned child agent (pid ${pid})\nresults: read_file ${result.outFile}\nerrors: read_file ${result.errFile}\ncheck alive: bash: kill -0 ${pid}`;
     } catch (err) {
       return `error: ${String(err)}`;
