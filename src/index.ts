@@ -83,11 +83,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { task, systemPath, verbose, model, cwd, maxTurns, help, unknownFlag };
 }
 
-function loadSystemPrompt(path: string): string {
+const FALLBACK_SYSTEM_PROMPT =
+  'You are a code agent. Work step by step. Use tools to read, write, and run code. Report what you did when done.';
+
+export function loadSystemPrompt(path: string, isDefault: boolean): string {
   try {
     return readFileSync(path, 'utf8').trim();
-  } catch {
-    return 'You are a code agent. Work step by step. Use tools to read, write, and run code. Report what you did when done.';
+  } catch (err) {
+    if (isDefault) return FALLBACK_SYSTEM_PROMPT;
+    process.stderr.write(`error: cannot read system prompt: ${path}: ${err}\n`);
+    process.exit(1);
   }
 }
 
@@ -204,7 +209,8 @@ async function main(): Promise<void> {
     process.chdir(resolved);
   }
 
-  const systemPrompt = loadSystemPrompt(systemPath);
+  const isDefaultSystem = systemPath === DEFAULT_SYSTEM_PATH;
+  const systemPrompt = loadSystemPrompt(systemPath, isDefaultSystem);
   const policy = maxTurns !== null ? { ...defaultPolicy, maxTurns } : defaultPolicy;
 
   if (task) {
