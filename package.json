@@ -1,0 +1,12 @@
+{
+  "name": "break-away-seams",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  }
+}

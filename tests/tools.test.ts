@@ -1,0 +1,115 @@
+// ABOUTME: Tests for the tool registry — finding tools by name, and read/write handlers with temp files.
+// ABOUTME: Uses real Bun file I/O; no mocks for the actual file operations.
+
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { tools } from '../src/tools.ts';
+import { join } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+
+function findTool(name: string) {
+  return tools.find((t) => t.definition.function.name === name);
+}
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = mkdtempSync(join(tmpdir(), 'ba-tools-test-'));
+});
+
+afterEach(() => {
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe('tool registry', () => {
+  test('exports an array with at least 3 tools', () => {
+    expect(Array.isArray(tools)).toBe(true);
+    expect(tools.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test('has read_file tool', () => {
+    expect(findTool('read_file')).toBeDefined();
+  });
+
+  test('has write_file tool', () => {
+    expect(findTool('write_file')).toBeDefined();
+  });
+
+  test('has bash tool', () => {
+    expect(findTool('bash')).toBeDefined();
+  });
+
+  test('each tool has definition and handler', () => {
+    for (const tool of tools) {
+      expect(tool.definition).toBeDefined();
+      expect(typeof tool.handler).toBe('function');
+      expect(tool.definition.type).toBe('function');
+      expect(tool.definition.function.name).toBeTruthy();
+    }
+  });
+});
+
+describe('write_file handler', () => {
+  test('writes content and confirms', async () => {
+    const filePath = join(tmpDir, 'hello.txt');
+    const tool = findTool('write_file')!;
+    const result = await tool.handler({ path: filePath, content: 'hello world' });
+    expect(result).toContain('wrote');
+    expect(result).toContain(filePath);
+  });
+
+  test('written content is readable', async () => {
+    const filePath = join(tmpDir, 'content.txt');
+    const writeTool = findTool('write_file')!;
+    const readTool = findTool('read_file')!;
+    await writeTool.handler({ path: filePath, content: 'my content' });
+    const result = await readTool.handler({ path: filePath });
+    expect(result).toBe('my content');
+  });
+});
+
+describe('read_file handler', () => {
+  test('returns file contents', async () => {
+    const filePath = join(tmpDir, 'test.txt');
+    await Bun.write(filePath, 'some text here');
+    const tool = findTool('read_file')!;
+    const result = await tool.handler({ path: filePath });
+    expect(result).toBe('some text here');
+  });
+
+  test('returns error string for missing file', async () => {
+    const tool = findTool('read_file')!;
+    const result = await tool.handler({ path: join(tmpDir, 'nonexistent.txt') });
+    expect(result).toMatch(/error/i);
+  });
+});
+
+describe('bash handler', () => {
+  test('captures stdout', async () => {
+    const tool = findTool('bash')!;
+    const result = await tool.handler({ cmd: 'echo hello' });
+    expect(result).toContain('hello');
+    expect(result).toContain('exit: 0');
+  });
+
+  test('captures exit code on failure', async () => {
+    const tool = findTool('bash')!;
+    const result = await tool.handler({ cmd: 'exit 42' });
+    expect(result).toContain('exit: 42');
+  });
+
+  test('output format includes stdout/stderr/exit labels', async () => {
+    const tool = findTool('bash')!;
+    const result = await tool.handler({ cmd: 'echo out; echo err >&2' });
+    expect(result).toContain('stdout:');
+    expect(result).toContain('stderr:');
+    expect(result).toContain('exit:');
+  });
+
+  test('truncates very long output', async () => {
+    const tool = findTool('bash')!;
+    // Generate > 8000 chars
+    const result = await tool.handler({ cmd: 'python3 -c "print(\'x\' * 10000)"' });
+    expect(result).toContain('[output truncated at 8000 chars]');
+  });
+});

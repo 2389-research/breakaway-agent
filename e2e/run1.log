@@ -1,0 +1,11 @@
+[tool] bash {"cmd": "mkdir -p /tmp/breakaway-e2e-seams-1 && ls /tmp/brea...
+[tool] write_file {"content": "export function greet(name: string): string {\n...
+[tool] write_file {"content": "import { describe, expect, test } from \"bun:te...
+[tool] bash {"cmd": "cd /tmp/breakaway-e2e-seams-1 && bun test"}
+Done. In `/tmp/breakaway-e2e-seams-1`:
+
+- **`greet.ts`** — exports `greet(name: string): string`, returning `hello, <name>` via a template literal.
+- **`greet.test.ts`** — 4 Bun tests (`bun:test`): basic greeting, empty string, multi-word name, and special characters.
+
+`bun test` ran with **4 pass, 0 fail**.
+done in 4 turns, 2933 tokens (prompt: 2546 / completion: 387), 7.7s
