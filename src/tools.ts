@@ -1,9 +1,36 @@
-// ABOUTME: Tool registry — read_file, list_dir, write_file, edit_file, bash, restart_self. Each tool has a definition and handler.
+// ABOUTME: Tool registry — read_file, list_dir, write_file, edit_file, bash, restart_self, spawn_agent.
 // ABOUTME: Output capped at 8000 chars; bash captures stdout, stderr, and exit code.
 
 import type { Tool } from './types.ts';
 import { statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+
+const TOOLS_SOURCE_DIR = import.meta.dir;
+const DEFAULT_SPAWN_TRANSCRIPT_DIR = resolve(TOOLS_SOURCE_DIR, '../.transcripts');
+
+export type SpawnArgsSuccess = { cmd: string; outFile: string; errFile: string };
+export type SpawnArgsError = { error: string };
+
+export function buildSpawnArgs(params: {
+  task: string;
+  cwd: string;
+  transcriptDir: string;
+  depth: number;
+  maxDepth: number;
+  ts: string;
+  indexPath: string;
+}): SpawnArgsSuccess | SpawnArgsError {
+  if (params.depth >= params.maxDepth) {
+    return { error: `spawn refused: max agent depth ${params.maxDepth} reached` };
+  }
+  const slug = params.ts.replace(/[:.]/g, '-');
+  const outFile = resolve(params.transcriptDir, `spawn-${slug}.out`);
+  const errFile = resolve(params.transcriptDir, `spawn-${slug}.err`);
+
+  const esc = (s: string) => s.replace(/'/g, `'\\''`);
+  const cmd = `nohup bun '${esc(params.indexPath)}' --cwd '${esc(params.cwd)}' '${esc(params.task)}' >'${esc(outFile)}' 2>'${esc(errFile)}' & echo $!`;
+  return { cmd, outFile, errFile };
+}
 
 const OUTPUT_CAP = 8000;
 
@@ -262,4 +289,50 @@ const restartSelf: Tool = {
   },
 };
 
-export const tools: Tool[] = [readFile, listDir, writeFile, editFile, bash, restartSelf];
+const spawnAgent: Tool = {
+  definition: {
+    type: 'function',
+    function: {
+      name: 'spawn_agent',
+      description:
+        'Launch a detached child agent for a task. The child runs in the background and survives this process exiting. ' +
+        'Results are written to the .out file shown in the response. Depth-guarded: refuses if agent nesting is too deep.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', description: 'Task for the child agent to perform.' },
+          cwd: { type: 'string', description: 'Working directory for the child. Defaults to current cwd.' },
+        },
+        required: ['task'],
+      },
+    },
+  },
+  async handler(args) {
+    const task = args['task'] as string;
+    const taskCwd = (args['cwd'] as string | undefined) ?? process.cwd();
+    const depth = Number(process.env.BREAK_AWAY_DEPTH ?? '0');
+    const maxDepth = Number(process.env.BREAK_AWAY_MAX_DEPTH ?? '3');
+    const transcriptDir = process.env.BREAK_AWAY_TRANSCRIPT_DIR ?? DEFAULT_SPAWN_TRANSCRIPT_DIR;
+    const indexPath = resolve(TOOLS_SOURCE_DIR, 'index.ts');
+    const ts = new Date().toISOString();
+
+    const result = buildSpawnArgs({ task, cwd: taskCwd, transcriptDir, depth, maxDepth, ts, indexPath });
+    if ('error' in result) return result.error;
+
+    try {
+      const proc = Bun.spawn(['bash', '-c', result.cmd], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: { ...process.env, BREAK_AWAY_DEPTH: String(depth + 1) },
+      });
+      const pidStr = (await new Response(proc.stdout).text()).trim();
+      const pid = parseInt(pidStr, 10);
+      if (!pid || isNaN(pid)) return `error: failed to get child pid (got: ${pidStr})`;
+      return `spawned child agent (pid ${pid})\nresults: read_file ${result.outFile}\nerrors: read_file ${result.errFile}\ncheck alive: bash: kill -0 ${pid}`;
+    } catch (err) {
+      return `error: ${String(err)}`;
+    }
+  },
+};
+
+export const tools: Tool[] = [readFile, listDir, writeFile, editFile, bash, restartSelf, spawnAgent];
