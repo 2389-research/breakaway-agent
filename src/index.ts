@@ -6,6 +6,7 @@ import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
 import type { Message, FinalState, Policy, Tool } from './types.ts';
 import { openTranscript, writeEvent, closeTranscript } from './transcript.ts';
+import defaultSystemText from '../system.txt' with { type: 'text' };
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
@@ -58,6 +59,10 @@ export async function doReload(toolsPath: string, policyPath: string, systemPath
 // main() re-registers with the actual systemPath after parsing args.
 let _sighupSystemPath = DEFAULT_SYSTEM_PATH;
 process.on('SIGHUP', () => {
+  if (isEmbedded()) {
+    process.stderr.write('[reload] compiled binary — reload unavailable; rebuild instead\n');
+    return;
+  }
   doReload(resolve(SOURCE_DIR, 'tools.ts'), resolve(SOURCE_DIR, 'policy.ts'), _sighupSystemPath);
 });
 
@@ -130,14 +135,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { task, systemPath, verbose, model, cwd, maxTurns, help, unknownFlag };
 }
 
-const FALLBACK_SYSTEM_PROMPT =
-  'You are a code agent. Work step by step. Use tools to read, write, and run code. Report what you did when done.';
-
 export function loadSystemPrompt(path: string, isDefault: boolean): string {
   try {
     return readFileSync(path, 'utf8').trim();
   } catch (err) {
-    if (isDefault) return FALLBACK_SYSTEM_PROMPT;
+    if (isDefault) return defaultSystemText.trim();
     process.stderr.write(`error: cannot read system prompt: ${path}: ${err}\n`);
     process.exit(1);
   }
