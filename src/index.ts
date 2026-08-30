@@ -6,7 +6,8 @@ import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
 import type { Message, FinalState, Policy, Tool } from './types.ts';
 import { openTranscript, writeEvent, closeTranscript, defaultTranscriptDir } from './transcript.ts';
-import { render, buildRenderConfig, type Tier } from './render.ts';
+import { render, buildRenderConfig, formatTransition, type Tier, type RenderConfig } from './render.ts';
+import { appendRecord, readRegistry, deriveAgentStates, diffAgentStates, type AgentState } from './registry.ts';
 import defaultSystemText from '../system.txt' with { type: 'text' };
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -21,7 +22,9 @@ export function isEmbedded(): boolean {
 export const RESTART_EXIT_CODE = 42;
 
 // Exit with RESTART_EXIT_CODE on SIGUSR2 so the wrapper script (bin/break-away-loop) relaunches.
+// Record agent_done before exit so the old pid doesn't read as "died" after a clean restart.
 process.on('SIGUSR2', () => {
+  appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString(), status: 'ok', stop_reason: 'restart' });
   process.exit(RESTART_EXIT_CODE);
 });
 
@@ -160,6 +163,110 @@ function transcriptDir(): string {
   return defaultTranscriptDir(SOURCE_DIR);
 }
 
+function registryPath(): string {
+  return join(transcriptDir(), 'agents.jsonl');
+}
+
+// ── Poller ────────────────────────────────────────────────────────────────────
+
+// Starts a 2s interval that reads the registry and prints state changes
+// for direct children (parent_pid === process.pid). Stderr only, all tiers.
+// Returns a stop function. The interval is unref'd so it won't keep the process alive.
+function startPoller(renderCfg: RenderConfig): () => void {
+  let prevStates = new Map<number, AgentState>();
+
+  const tick = async () => {
+    try {
+      const records = await readRegistry(registryPath());
+      const nextStates = deriveAgentStates(records);
+      const transitions = diffAgentStates(prevStates, nextStates, process.pid);
+      for (const t of transitions) {
+        process.stderr.write(formatTransition(t, renderCfg));
+      }
+      prevStates = nextStates;
+    } catch {
+      // best-effort — swallow
+    }
+  };
+
+  const handle = setInterval(tick, 2000);
+  // Bun supports unref() — verified below; prevents timer from keeping process alive.
+  if (typeof handle.unref === 'function') handle.unref();
+
+  return () => clearInterval(handle);
+}
+
+// ── /agents REPL command ──────────────────────────────────────────────────────
+
+async function printAgentsTree(renderCfg: RenderConfig): Promise<void> {
+  const records = await readRegistry(registryPath());
+  const states = deriveAgentStates(records);
+
+  // Build full descendant tree rooted at our pid.
+  function descendants(pid: number): number[] {
+    const result: number[] = [];
+    for (const [p, s] of states) {
+      if (s.parentPid === pid) {
+        result.push(p);
+        result.push(...descendants(p));
+      }
+    }
+    return result;
+  }
+
+  const ours = new Set([process.pid, ...descendants(process.pid)]);
+
+  const age = (ts: string) => {
+    const ms = Date.now() - new Date(ts).getTime();
+    return Math.round(ms / 1000) + 's';
+  };
+  const taskSnippet = (t: string) => (t.length > 60 ? t.slice(0, 57) + '…' : t);
+
+  // Colored state markers: running=CYAN ●, done=GREEN ✔ (YELLOW when error), died=RED ✗
+  function stateMarkerColored(s: AgentState): string {
+    if (s.state === 'running') {
+      return renderCfg.tty ? `\x1b[36m●\x1b[0m` : '●';
+    }
+    if (s.state === 'done') {
+      if (s.exitStatus === 'error') return renderCfg.tty ? `\x1b[33m✔\x1b[0m` : '✔';
+      return renderCfg.tty ? `\x1b[32m✔\x1b[0m` : '✔';
+    }
+    // died
+    return renderCfg.tty ? `\x1b[31m✗\x1b[0m` : '✗';
+  }
+
+  // Walk depth-first from our pid.
+  function printNode(pid: number, depth: number) {
+    const s = states.get(pid);
+    const indent = '  '.repeat(depth);
+    if (pid === process.pid) {
+      const marker = renderCfg.tty ? `\x1b[36m●\x1b[0m` : '●';
+      process.stderr.write(`${indent}${marker} ${pid} (self)  ${taskSnippet(s?.task ?? 'repl')}\n`);
+    } else if (s) {
+      const marker = stateMarkerColored(s);
+      process.stderr.write(`${indent}${marker} ${pid}  ${s.state}  ${age(s.startTs)}  ${taskSnippet(s.task)}\n`);
+    }
+    for (const [childPid, cs] of states) {
+      if (cs.parentPid === pid) printNode(childPid, depth + 1);
+    }
+  }
+
+  // Check if our self entry exists (it should from agent_start at boot).
+  if (!states.has(process.pid)) {
+    process.stderr.write(`(self not yet registered in registry)\n`);
+  }
+  printNode(process.pid, 0);
+
+  // Count live agents outside our tree.
+  let outsiders = 0;
+  for (const [pid, s] of states) {
+    if (!ours.has(pid) && s.state === 'running') outsiders++;
+  }
+  if (outsiders > 0) {
+    process.stderr.write(`other live agents in registry: ${outsiders}\n`);
+  }
+}
+
 async function runTask(
   task: string,
   systemPrompt: string,
@@ -184,6 +291,8 @@ async function runTask(
   await writeEvent(handle, startEvent);
   render(startEvent, renderCfg, (s) => process.stderr.write(s));
 
+  const stopPoller = startPoller(renderCfg);
+
   const policy = {
     ...basePolicy,
     onEvent: (e: Record<string, unknown>) => {
@@ -193,6 +302,8 @@ async function runTask(
   };
   const state = await run(messages, currentRefs.tools, policy, model);
 
+  stopPoller();
+
   const doneEvent = {
     event: 'done',
     turns: state.turns,
@@ -201,6 +312,35 @@ async function runTask(
   };
   await writeEvent(handle, doneEvent);
   render(doneEvent, renderCfg, (s) => process.stderr.write(s));
+
+  // agent_done registry record with status derived from stop reason.
+  const agentDoneStatus: 'ok' | 'error' = (state.stopReason === 'error' || state.stopReason === 'aborted') ? 'error' : 'ok';
+  await appendRecord(registryPath(), {
+    event: 'agent_done',
+    pid: process.pid,
+    ts: new Date().toISOString(),
+    status: agentDoneStatus,
+    stop_reason: state.stopReason,
+  });
+
+  // End-of-run summary: list still-running direct children.
+  const records = await readRegistry(registryPath());
+  const states = deriveAgentStates(records);
+  const stillRunning: AgentState[] = [];
+  for (const s of states.values()) {
+    if (s.parentPid === process.pid && s.state === 'running') {
+      stillRunning.push(s);
+    }
+  }
+  if (stillRunning.length > 0) {
+    const noun = stillRunning.length === 1 ? 'child still running' : 'children still running';
+    process.stderr.write(`${stillRunning.length} ${noun}:\n`);
+    for (const s of stillRunning) {
+      const errLine = s.errFile ? `  tail -f ${s.errFile}` : '';
+      process.stderr.write(`  pid ${s.pid}${errLine}\n`);
+    }
+  }
+
   await closeTranscript(handle);
 
   return state;
@@ -223,6 +363,8 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
 
   process.stderr.write('break-away repl — ctrl+D to exit\n');
 
+  const stopPoller = startPoller(renderCfg);
+
   for await (const line of console) {
     const task = line.trim();
     if (!task) {
@@ -240,7 +382,13 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
       continue;
     }
     if (task === '/restart') {
+      appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString(), status: 'ok', stop_reason: 'restart' });
       process.exit(RESTART_EXIT_CODE);
+    }
+    if (task === '/agents') {
+      await printAgentsTree(renderCfg);
+      process.stderr.write('> ');
+      continue;
     }
 
     messages.push({ role: 'user', content: task });
@@ -279,6 +427,9 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
     process.stderr.write('> ');
   }
 
+  stopPoller();
+  // Ctrl+D path: clean exit, status ok.
+  await appendRecord(registryPath(), { event: 'agent_done', pid: process.pid, ts: new Date().toISOString(), status: 'ok', stop_reason: 'done' });
   await closeTranscript(handle);
 }
 
@@ -312,6 +463,19 @@ async function main(): Promise<void> {
 
   // Update the SIGHUP handler's systemPath now that we know it.
   _sighupSystemPath = systemPath;
+
+  // Record boot in the shared registry.
+  const parentPidEnv = process.env.BREAK_AWAY_PARENT_PID;
+  const parentPidVal = parentPidEnv ? Number(parentPidEnv) : null;
+  await appendRecord(registryPath(), {
+    event: 'agent_start',
+    pid: process.pid,
+    parent_pid: parentPidVal,
+    depth: Number(process.env.BREAK_AWAY_DEPTH ?? '0'),
+    task: task ?? 'repl',
+    cwd: process.cwd(),
+    ts: new Date().toISOString(),
+  });
 
   if (task) {
     const state = await runTask(task, systemPrompt, model, tier, policy);

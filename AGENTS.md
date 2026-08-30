@@ -39,6 +39,7 @@ Design goal: swapping context strategy, system prompt, or tool set each touches
 |---------|--------|
 | `/reload` | Hot-reload seams (tools.ts, policy.ts, system.txt) via SIGHUP path |
 | `/restart` | Exit with code 42; `break-away-loop` relaunches the process |
+| `/agents` | Print the descendant agent tree (pid, state, age, task); outsiders summarised |
 
 ## Signals
 
@@ -54,6 +55,10 @@ Relaunches break-away on exit code 42 (`RESTART_EXIT_CODE`), up to `BREAK_AWAY_M
 ## spawn_agent tool
 
 Launches a detached child agent via `nohup bun src/index.ts ... &`. Child survives parent exit. Depth-guarded: `BREAK_AWAY_DEPTH` tracks nesting; `BREAK_AWAY_MAX_DEPTH` (default 3) sets the cap. Results go to `spawn-<ts>.out`/`.err` in the transcript directory.
+
+The spawn renders a `◆ spawned agent <pid>` block to stderr immediately. A 2-second background poll watches for state transitions and prints `◆ agent <pid> done (<age>s)` or `✗ agent <pid> died (<age>s)` to stderr as they happen. After one-shot completes, still-running children are listed with `tail -f` hints.
+
+**Registry:** every agent writes to `agents.jsonl` in the transcript directory (`BREAK_AWAY_TRANSCRIPT_DIR`, or `~/.break-away/transcripts` in binary mode). Records: `agent_spawn` (parent writes it), `agent_start` (child writes at boot), `agent_done` (child writes on clean exit). State is derived live via `process.kill(pid, 0)` — done > running > died.
 
 ## Binary mode (`bun run build`)
 
