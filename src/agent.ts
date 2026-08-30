@@ -56,6 +56,7 @@ export async function run(
   messages: Message[],
   tools: Tool[],
   policy: Policy,
+  modelOverride?: string | null,
 ): Promise<FinalState> {
   const start = Date.now();
   const allMessages = [...messages];
@@ -68,7 +69,7 @@ export async function run(
 
     let response: Awaited<ReturnType<typeof chat>>;
     try {
-      response = await chat(contextMessages, toolDefs, verbose);
+      response = await chat(contextMessages, toolDefs, verbose, modelOverride);
     } catch (err) {
       allMessages.push({ role: 'assistant', content: `error: ${String(err)}` });
       return {
@@ -95,7 +96,8 @@ export async function run(
       for (const tc of tcs) {
         const { result, isError } = await executeToolCall(tc, tools);
 
-        if (isError && tc.function.name !== 'unknown' && tools.find((t) => t.definition.function.name === tc.function.name)) {
+        const isKnownTool = !!tools.find((t) => t.definition.function.name === tc.function.name);
+        if (isError && isKnownTool) {
           // Known tool that errored — apply error policy
           if (policy.onToolError === 'abort') {
             allMessages.push(toolResultMessage(tc, result));

@@ -1,29 +1,40 @@
-// ABOUTME: OpenAI-compatible HTTP client — reads env vars, calls the chat completions endpoint.
-// ABOUTME: Returns a normalized {message, usage, finish_reason} object; no streaming.
+// ABOUTME: OpenAI-compatible HTTP client — reads env vars lazily at call time, not import time.
+// ABOUTME: buildClientConfig() and chat() accept a modelOverride so --model flows through cleanly.
 
 import OpenAI from 'openai';
 import type { Message, ToolDefinition } from './types.ts';
 
-const apiKey = process.env.OPENAI_COMPATIBLE_API_KEY ?? '';
-const baseURL = process.env.OPENAI_COMPATIBLE_BASE_URL ?? 'https://api.openai.com/v1';
-const model = process.env.OPENAI_COMPATIBLE_MODEL ?? 'gpt-4o';
+export type ClientConfig = {
+  model: string;
+  apiKey: string;
+  baseURL: string;
+};
 
-const client = new OpenAI({ apiKey, baseURL });
+export function buildClientConfig(opts: { modelOverride?: string | null }): ClientConfig {
+  const model = opts.modelOverride ?? process.env.OPENAI_COMPATIBLE_MODEL ?? 'gpt-4o';
+  const apiKey = process.env.OPENAI_COMPATIBLE_API_KEY ?? '';
+  const baseURL = process.env.OPENAI_COMPATIBLE_BASE_URL ?? 'https://api.openai.com/v1';
+  return { model, apiKey, baseURL };
+}
 
 export async function chat(
   messages: Message[],
   tools: ToolDefinition[],
   verbose = false,
+  modelOverride?: string | null,
 ): Promise<{
   message: Message;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   finish_reason: string;
 }> {
+  const config = buildClientConfig({ modelOverride });
+  const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL });
+
   // Cast messages to the shape OpenAI expects — the union is compatible at runtime.
   const openaiMessages = messages as OpenAI.Chat.ChatCompletionMessageParam[];
 
   const params: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
-    model,
+    model: config.model,
     messages: openaiMessages,
     stream: false,
   };

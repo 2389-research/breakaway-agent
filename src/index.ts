@@ -1,34 +1,76 @@
 // ABOUTME: CLI entry point — parses args, builds initial messages, runs REPL or one-shot mode.
-// ABOUTME: Every run ends with a stats line to stdout. Tool progress goes to stderr.
+// ABOUTME: Stats and progress go to stderr; only the final prose answer goes to stdout.
 
 import { run, setVerbose } from './agent.ts';
 import { tools } from './tools.ts';
 import { defaultPolicy } from './policy.ts';
 import type { Message, FinalState } from './types.ts';
-import { readFileSync } from 'node:fs';
+import { openTranscript, writeEvent, closeTranscript } from './transcript.ts';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+
+// Anchor paths before any chdir so they survive --cwd.
+const SOURCE_DIR = import.meta.dir;
+const DEFAULT_TRANSCRIPT_DIR = resolve(SOURCE_DIR, '../.transcripts');
+const DEFAULT_SYSTEM_PATH = join(SOURCE_DIR, '../system.txt');
 
 export function formatStats(state: FinalState): string {
   const secs = (state.elapsed / 1000).toFixed(1);
   return `done in ${state.turns} turns, ${state.usage.total_tokens} tokens (prompt: ${state.usage.prompt_tokens} / completion: ${state.usage.completion_tokens}), ${secs}s`;
 }
 
-function parseArgs(argv: string[]): { task: string | null; systemPath: string; verbose: boolean } {
+const USAGE = `
+Usage: bun src/index.ts [OPTIONS] [TASK]
+
+  TASK             Task string for one-shot mode. Omit for REPL.
+
+Options:
+  --cwd <path>     Change working directory before running tools.
+  --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL).
+  --system <path>  Path to system prompt file (default: system.txt).
+  --verbose        Print model reasoning (if supported by provider).
+  --help           Print this help and exit.
+`.trim();
+
+export type ParsedArgs = {
+  task: string | null;
+  systemPath: string;
+  verbose: boolean;
+  model: string | null;
+  cwd: string | null;
+  help: boolean;
+  unknownFlag: string | null;
+};
+
+export function parseArgs(argv: string[]): ParsedArgs {
   let task: string | null = null;
-  let systemPath = 'system.txt';
+  let systemPath = DEFAULT_SYSTEM_PATH;
   let verbose = false;
+  let model: string | null = null;
+  let cwd: string | null = null;
+  let help = false;
+  let unknownFlag: string | null = null;
 
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--verbose') {
       verbose = true;
+    } else if (args[i] === '--help') {
+      help = true;
     } else if (args[i] === '--system' && args[i + 1]) {
       systemPath = args[++i];
-    } else if (!args[i].startsWith('--')) {
+    } else if (args[i] === '--model' && args[i + 1]) {
+      model = args[++i];
+    } else if (args[i] === '--cwd' && args[i + 1]) {
+      cwd = args[++i];
+    } else if (args[i].startsWith('--')) {
+      unknownFlag = args[i];
+    } else {
       task = args[i];
     }
   }
 
-  return { task, systemPath, verbose };
+  return { task, systemPath, verbose, model, cwd, help, unknownFlag };
 }
 
 function loadSystemPrompt(path: string): string {
@@ -39,30 +81,64 @@ function loadSystemPrompt(path: string): string {
   }
 }
 
-async function runTask(task: string, systemPrompt: string): Promise<FinalState> {
+function transcriptDir(): string {
+  return process.env.BREAK_AWAY_TRANSCRIPT_DIR ?? DEFAULT_TRANSCRIPT_DIR;
+}
+
+async function runTask(
+  task: string,
+  systemPrompt: string,
+  model: string | null,
+): Promise<FinalState> {
   const messages: Message[] = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: task },
   ];
 
-  return run(messages, tools, defaultPolicy);
+  const handle = await openTranscript(transcriptDir());
+  await writeEvent(handle, {
+    event: 'run_start',
+    task,
+    model: model ?? process.env.OPENAI_COMPATIBLE_MODEL ?? 'gpt-4o',
+    cwd: process.cwd(),
+  });
+
+  const state = await run(messages, tools, defaultPolicy, model);
+
+  await writeEvent(handle, {
+    event: 'done',
+    turns: state.turns,
+    tokens: state.usage.total_tokens,
+    duration_ms: state.elapsed,
+  });
+  await closeTranscript(handle);
+
+  return state;
 }
 
-async function repl(systemPrompt: string): Promise<void> {
+async function repl(systemPrompt: string, model: string | null): Promise<void> {
   const messages: Message[] = [{ role: 'system', content: systemPrompt }];
 
-  process.stdout.write('break-away repl — ctrl+D to exit\n');
+  const handle = await openTranscript(transcriptDir());
+  await writeEvent(handle, {
+    event: 'run_start',
+    task: 'repl',
+    model: model ?? process.env.OPENAI_COMPATIBLE_MODEL ?? 'gpt-4o',
+    cwd: process.cwd(),
+  });
+
+  process.stderr.write('break-away repl — ctrl+D to exit\n');
 
   for await (const line of console) {
     const task = line.trim();
     if (!task) {
-      process.stdout.write('> ');
+      process.stderr.write('> ');
       continue;
     }
 
     messages.push({ role: 'user', content: task });
 
-    const state = await run(messages, tools, defaultPolicy);
+    const state = await run(messages, tools, defaultPolicy, model);
 
     // Append the assistant's final reply to messages for continuity
     const lastAssistant = [...state.messages].reverse().find((m) => m.role === 'assistant');
@@ -77,27 +153,56 @@ async function repl(systemPrompt: string): Promise<void> {
       process.stdout.write(lastMsg.content + '\n');
     }
 
-    process.stdout.write(formatStats(state) + '\n');
-    process.stdout.write('> ');
+    await writeEvent(handle, {
+      event: 'done',
+      turns: state.turns,
+      tokens: state.usage.total_tokens,
+      duration_ms: state.elapsed,
+    });
+
+    process.stderr.write(formatStats(state) + '\n');
+    process.stderr.write('> ');
   }
+
+  await closeTranscript(handle);
 }
 
 async function main(): Promise<void> {
-  const { task, systemPath, verbose } = parseArgs(process.argv);
+  const { task, systemPath, verbose, model, cwd, help, unknownFlag } = parseArgs(process.argv);
+
+  if (unknownFlag) {
+    process.stderr.write(`error: unknown flag: ${unknownFlag}\n\n${USAGE}\n`);
+    process.exit(1);
+  }
+
+  if (help) {
+    process.stderr.write(USAGE + '\n');
+    process.exit(0);
+  }
 
   setVerbose(verbose);
+
+  if (cwd) {
+    const resolved = resolve(cwd);
+    if (!existsSync(resolved)) {
+      process.stderr.write(`error: --cwd path does not exist: ${resolved}\n\n${USAGE}\n`);
+      process.exit(1);
+    }
+    process.chdir(resolved);
+  }
 
   const systemPrompt = loadSystemPrompt(systemPath);
 
   if (task) {
-    const state = await runTask(task, systemPrompt);
+    const state = await runTask(task, systemPrompt, model);
     const lastMsg = state.messages[state.messages.length - 1];
     if (lastMsg && lastMsg.content) {
       process.stdout.write(lastMsg.content + '\n');
     }
-    process.stdout.write(formatStats(state) + '\n');
+    // Stats to stderr only
+    process.stderr.write(formatStats(state) + '\n');
   } else {
-    await repl(systemPrompt);
+    await repl(systemPrompt, model);
   }
 }
 

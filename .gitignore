@@ -1,3 +1,4 @@
 .env
 .worktrees/
 node_modules/
+.transcripts/

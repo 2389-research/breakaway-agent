@@ -189,6 +189,40 @@ describe('agent run — onToolError nudge', () => {
   });
 });
 
+describe('agent run — onToolError retry', () => {
+  test('retries the tool once on error and pushes the retry result', async () => {
+    mockChat.mockResolvedValueOnce({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'flaky_retry', arguments: '{}' } }],
+      },
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      finish_reason: 'tool_calls',
+    });
+    mockChat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'done after retry' },
+      usage: { prompt_tokens: 15, completion_tokens: 5, total_tokens: 20 },
+      finish_reason: 'stop',
+    });
+
+    let callCount = 0;
+    const retryTool = makeTool('flaky_retry', async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('first attempt fails');
+      return 'retry succeeded';
+    });
+
+    const state = await run(initialMessages(), [retryTool], makePolicy({ onToolError: 'retry' }));
+    expect(state.stopReason).toBe('done');
+    // Tool was called twice (original + 1 retry)
+    expect(callCount).toBe(2);
+    // The retry result is in messages
+    const toolResult = state.messages.find((m) => m.role === 'tool');
+    expect(toolResult?.content).toBe('retry succeeded');
+  });
+});
+
 describe('agent run — contextStrategy', () => {
   test('contextStrategy is called before each API call', async () => {
     let called = 0;

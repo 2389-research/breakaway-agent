@@ -7,7 +7,8 @@ const OUTPUT_CAP = 8000;
 
 function cap(output: string): string {
   if (output.length <= OUTPUT_CAP) return output;
-  return output.slice(0, OUTPUT_CAP) + `\n[output truncated at ${OUTPUT_CAP} chars]`;
+  const tail = output.slice(-OUTPUT_CAP);
+  return `[truncated: showing last ${OUTPUT_CAP} of ${output.length} chars]\n` + tail;
 }
 
 const readFile: Tool = {
@@ -65,6 +66,8 @@ const writeFile: Tool = {
   },
 };
 
+const BASH_DEFAULT_TIMEOUT_MS = 30_000;
+
 const bash: Tool = {
   definition: {
     type: 'function',
@@ -75,6 +78,10 @@ const bash: Tool = {
         type: 'object',
         properties: {
           cmd: { type: 'string', description: 'Shell command to run.' },
+          timeout_ms: {
+            type: 'number',
+            description: `Timeout in milliseconds (default ${BASH_DEFAULT_TIMEOUT_MS}).`,
+          },
         },
         required: ['cmd'],
       },
@@ -82,16 +89,31 @@ const bash: Tool = {
   },
   async handler(args) {
     const cmd = args['cmd'] as string;
+    const timeoutMs = (args['timeout_ms'] as number | undefined) ?? BASH_DEFAULT_TIMEOUT_MS;
     try {
       const proc = Bun.spawn(['bash', '-c', cmd], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
+
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        proc.kill();
+      }, timeoutMs);
+
       const [stdoutBuf, stderrBuf, exitCode] = await Promise.all([
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
         proc.exited,
       ]);
+      clearTimeout(timer);
+
+      if (timedOut) {
+        const partial = stdoutBuf + stderrBuf;
+        return `[timed out after ${timeoutMs}ms — process killed]${partial ? `\npartial output:\n${partial}` : ''}`;
+      }
+
       const combined = `stdout:\n${stdoutBuf}\nstderr:\n${stderrBuf}\nexit: ${exitCode}`;
       return cap(combined);
     } catch (err) {

@@ -106,10 +106,26 @@ describe('bash handler', () => {
     expect(result).toContain('exit:');
   });
 
-  test('truncates very long output', async () => {
+  test('truncates very long output at the TAIL (last 8000 chars)', async () => {
     const tool = findTool('bash')!;
-    // Generate > 8000 chars
-    const result = await tool.handler({ cmd: 'python3 -c "print(\'x\' * 10000)"' });
-    expect(result).toContain('[output truncated at 8000 chars]');
+    // 20000 A's followed by 20000 Z's — total 40000 chars, well over 8000 cap.
+    // The tail-8000 window will land entirely in the Z's section.
+    const result = await tool.handler({
+      cmd: "python3 -c \"print('A' * 20000 + 'Z' * 20000, end='')\"",
+    });
+    // Should show truncation marker
+    expect(result).toContain('truncated');
+    // Tail preserved: output ends with Z's (the last chars of the stream)
+    expect(result.slice(-100)).toMatch(/Z+/);
+    // Head (all A's) is gone — only the tail survives; 'AAAA' won't appear
+    expect(result).not.toContain('AAAA');
+  });
+
+  test('timeout kills hung process and returns timeout message', async () => {
+    const tool = findTool('bash')!;
+    // Use a very short timeout to avoid slowing tests — 200ms
+    const result = await tool.handler({ cmd: 'sleep 10', timeout_ms: 200 });
+    expect(result).toMatch(/timed out/i);
+    expect(result).toContain('200');
   });
 });
