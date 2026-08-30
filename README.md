@@ -79,9 +79,23 @@ The agent can edit its own source files and reload or restart without restarting
 spawn_agent(task="...", cwd="/path/to/work")
 ```
 
-The child runs `bun src/index.ts` in the background. Its stdout goes to a `spawn-<ts>.out` file in the transcript directory; stderr to `spawn-<ts>.err`. The parent gets back the pid and file paths immediately.
+The child runs `bun src/index.ts` in the background. Its stdout goes to a `spawn-<ts>.out` file in the transcript directory; stderr to `spawn-<ts>.err`. The parent gets back the pid and file paths immediately, and renders a `◆ spawned agent <pid>` block to stderr.
 
 Agent depth is tracked via `BREAK_AWAY_DEPTH` (default 0). `BREAK_AWAY_MAX_DEPTH` (default 3) caps nesting — spawn_agent returns an error rather than launching when the cap is reached.
+
+**Agent registry:** every process records its spawn, start, and done events to `agents.jsonl` in the transcript directory. This gives a shared view of what's running across parent and child agents — even after the parent exits and pids get reparented to PID 1.
+
+**Live status polling:** while a run is active, a 2-second background poll watches for direct-child state changes and prints one line per transition to stderr:
+- `◆ agent <pid> done (<age>s)` — child finished normally
+- `✗ agent <pid> died (<age>s)` — child crashed without writing a done record
+
+**REPL `/agents` command:** prints a depth-indented tree of all agents descended from the current process, with state marker (●/✔/✗), age, and task snippet. Outsiders (live agents from other tree roots) are summarised at the bottom.
+
+Each child's `.err` file is its own live TUI stream — follow it with:
+```sh
+tail -f /path/to/spawn-<ts>.err
+```
+The path appears in the `◆ spawned agent` block at spawn time and in the end-of-run summary for any still-running children.
 
 ## Building a binary
 
