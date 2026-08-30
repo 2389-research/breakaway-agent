@@ -1,6 +1,8 @@
 // ABOUTME: Stderr renderer — pure function of (event, config, writer) => void.
 // ABOUTME: Three tiers: quiet / rich (default) / debug. Color only when TTY and NO_COLOR unset.
 
+import type { AgentTransition } from './registry.ts';
+
 export type Tier = 'quiet' | 'rich' | 'debug';
 
 export type RenderConfig = {
@@ -25,6 +27,20 @@ const BOLD = (c: RenderConfig) => ansi(c, '1');
 const CYAN = (c: RenderConfig) => ansi(c, '36');
 const YELLOW = (c: RenderConfig) => ansi(c, '33');
 const RED = (c: RenderConfig) => ansi(c, '31');
+const GREEN = (c: RenderConfig) => ansi(c, '32');
+
+// Format an agent lifecycle transition for stderr output.
+export function formatTransition(t: AgentTransition, config: RenderConfig): string {
+  if (t.state === 'done') {
+    if (t.exitStatus === 'error') {
+      const reason = t.stopReason ? `error: ${t.stopReason}, ` : 'error, ';
+      return `${YELLOW(config)}◆ agent ${t.pid} done (${reason}${t.ageSecs}s)${RESET(config)}\n`;
+    }
+    return `${GREEN(config)}◆ agent ${t.pid} done (${t.ageSecs}s)${RESET(config)}\n`;
+  }
+  // died
+  return `${RED(config)}✗ agent ${t.pid} died (${t.ageSecs}s)${RESET(config)}\n`;
+}
 
 function argsCompact(args: unknown, maxChars = 80): string {
   try {
@@ -98,7 +114,7 @@ export function render(event: Record<string, unknown>, config: RenderConfig, wri
         // Parse out path from "results: read_file <path>"
         const outMatch = result.match(/results: read_file (.+)/);
         const outPath = outMatch ? outMatch[1] : '';
-        writer(`${BOLD(config)}◆ spawned agent ${pid}${RESET(config)}\n`);
+        writer(`${CYAN(config)}${BOLD(config)}◆ spawned agent ${pid}${RESET(config)}\n`);
         if (config.tier !== 'quiet' && outPath) {
           writer(`  ${DIM(config)}out: ${outPath}${RESET(config)}\n`);
         }

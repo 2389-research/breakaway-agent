@@ -2,7 +2,8 @@
 // ABOUTME: All assertions run under NO_COLOR / non-TTY so output is plain text; no ANSI escapes.
 
 import { describe, test, expect } from 'bun:test';
-import { render, type RenderConfig } from '../src/render.ts';
+import { render, formatTransition, type RenderConfig } from '../src/render.ts';
+import type { AgentTransition } from '../src/registry.ts';
 
 // Capture rendered output into a string for assertion.
 // render() writes to a provided writer; we pass a collector here.
@@ -184,7 +185,7 @@ describe('render — unknown events', () => {
 // ── spawn_agent tool_result special rendering ─────────────────────────────────
 
 describe('render — spawn_agent tool_result', () => {
-  const spawnSuccessResult = 'spawned child agent (pid 12345)\nresults: read_file /tmp/x.out\nerrors: read_file /tmp/x.err\ncheck alive: bash: kill -0 12345';
+  const spawnSuccessResult = 'spawned child agent (pid 12345)\nresults: read_file /tmp/x.out\nerrors: read_file /tmp/x.err\nstatus: read_file /tmp/transcripts/agents.jsonl';
 
   test('rich: renders spawn success as distinct block with pid', () => {
     const out = collect({ event: 'tool_result', name: 'spawn_agent', chars: spawnSuccessResult.length, truncated: false, result: spawnSuccessResult }, RICH);
@@ -236,5 +237,68 @@ describe('render — color gating', () => {
       { tier: 'rich', tty: true },
     );
     expect(out).toMatch(/\x1b\[/);
+  });
+});
+
+// ── formatTransition ─────────────────────────────────────────────────────────
+
+describe('formatTransition', () => {
+  const PLAIN: RenderConfig = { tier: 'rich', tty: false };
+  const TTY: RenderConfig = { tier: 'rich', tty: true };
+
+  test('done+ok → plain text contains pid and ageSecs (no ANSI)', () => {
+    const t: AgentTransition = { pid: 42, state: 'done', ageSecs: 10, exitStatus: 'ok' };
+    const out = formatTransition(t, PLAIN);
+    expect(out).toContain('42');
+    expect(out).toContain('10s');
+    expect(out).toContain('done');
+    expect(out).not.toMatch(/\x1b\[/);
+  });
+
+  test('done+ok → tty emits green ANSI codes', () => {
+    const t: AgentTransition = { pid: 42, state: 'done', ageSecs: 10, exitStatus: 'ok' };
+    const out = formatTransition(t, TTY);
+    expect(out).toContain('42');
+    // Green = \x1b[32m
+    expect(out).toContain('\x1b[32m');
+  });
+
+  test('done+error → plain text contains pid, stop_reason, and ageSecs', () => {
+    const t: AgentTransition = { pid: 7, state: 'done', ageSecs: 5, exitStatus: 'error', stopReason: 'aborted' };
+    const out = formatTransition(t, PLAIN);
+    expect(out).toContain('7');
+    expect(out).toContain('aborted');
+    expect(out).toContain('5s');
+    expect(out).not.toMatch(/\x1b\[/);
+  });
+
+  test('done+error → tty emits yellow ANSI codes', () => {
+    const t: AgentTransition = { pid: 7, state: 'done', ageSecs: 5, exitStatus: 'error', stopReason: 'aborted' };
+    const out = formatTransition(t, TTY);
+    // Yellow = \x1b[33m
+    expect(out).toContain('\x1b[33m');
+  });
+
+  test('died → plain text contains pid and ageSecs', () => {
+    const t: AgentTransition = { pid: 99, state: 'died', ageSecs: 3 };
+    const out = formatTransition(t, PLAIN);
+    expect(out).toContain('99');
+    expect(out).toContain('3s');
+    expect(out).toContain('died');
+    expect(out).not.toMatch(/\x1b\[/);
+  });
+
+  test('died → tty emits red ANSI codes', () => {
+    const t: AgentTransition = { pid: 99, state: 'died', ageSecs: 3 };
+    const out = formatTransition(t, TTY);
+    // Red = \x1b[31m
+    expect(out).toContain('\x1b[31m');
+  });
+
+  test('done+ok without exitStatus treated as ok (green)', () => {
+    // exitStatus is optional; absent means treat as ok
+    const t: AgentTransition = { pid: 1, state: 'done', ageSecs: 2 };
+    const out = formatTransition(t, TTY);
+    expect(out).toContain('\x1b[32m');
   });
 });
