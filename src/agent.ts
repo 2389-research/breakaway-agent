@@ -13,18 +13,6 @@ function emitEvent(policy: Policy, event: Record<string, unknown>): void {
   }
 }
 
-let verbose = false;
-
-export function setVerbose(v: boolean): void {
-  verbose = v;
-}
-
-function argsPreview(argsJson: string): string {
-  const MAX = 60;
-  if (argsJson.length <= MAX) return argsJson;
-  return argsJson.slice(0, MAX) + '...';
-}
-
 async function executeToolCall(
   tc: ToolCall,
   tools: Tool[],
@@ -42,8 +30,8 @@ async function executeToolCall(
     return { result: `error: could not parse tool arguments: ${tc.function.arguments}`, isError: true };
   }
 
-  process.stderr.write(`[tool] ${tc.function.name} ${argsPreview(tc.function.arguments)}\n`);
-
+  // Tool progress is emitted via events — no direct stderr writes.
+  // The tool_call event is emitted by the caller before invoking this function.
   try {
     const result = await tool.handler(args);
     return { result, isError: false };
@@ -77,8 +65,9 @@ export async function run(
     const contextMessages = policy.contextStrategy(allMessages);
 
     let response: Awaited<ReturnType<typeof chat>>;
+    const apiStart = Date.now();
     try {
-      response = await chat(contextMessages, toolDefs, verbose, modelOverride);
+      response = await chat(contextMessages, toolDefs, modelOverride);
     } catch (err) {
       allMessages.push({ role: 'assistant', content: `error: ${String(err)}` });
       return {
@@ -89,11 +78,13 @@ export async function run(
         stopReason: 'error',
       };
     }
+    const api_ms = Date.now() - apiStart;
 
     usage.prompt_tokens += response.usage.prompt_tokens;
     usage.completion_tokens += response.usage.completion_tokens;
     usage.total_tokens += response.usage.total_tokens;
 
+    // Store message WITHOUT reasoning — some providers reject echoed reasoning.
     allMessages.push(response.message);
     turns++;
 
@@ -102,6 +93,8 @@ export async function run(
     emitEvent(policy, {
       event: 'assistant',
       content: response.message.content ?? '',
+      reasoning: response.reasoning ?? '',
+      api_ms,
       tool_calls: (response.message.tool_calls ?? []).map((tc) => ({
         name: tc.function.name,
         args_chars: tc.function.arguments.length,
@@ -118,7 +111,7 @@ export async function run(
 
         const { result, isError } = await executeToolCall(tc, tools);
         const truncated = result.startsWith('[truncated:');
-        emitEvent(policy, { event: 'tool_result', name: tc.function.name, chars: result.length, truncated });
+        emitEvent(policy, { event: 'tool_result', name: tc.function.name, chars: result.length, truncated, result });
 
         const isKnownTool = !!tools.find((t) => t.definition.function.name === tc.function.name);
         if (isError && isKnownTool) {
@@ -133,12 +126,12 @@ export async function run(
               stopReason: 'aborted',
             };
           } else if (policy.onToolError === 'retry') {
-            // Retry once
-            process.stderr.write(`[tool] retrying ${tc.function.name}...\n`);
+            emitEvent(policy, { event: 'tool_retry', tool: tc.function.name, attempt: 1 });
             const retry = await executeToolCall(tc, tools);
-            emitEvent(policy, { event: 'tool_result', name: tc.function.name, chars: retry.result.length, truncated: retry.result.startsWith('[truncated:') });
+            emitEvent(policy, { event: 'tool_result', name: tc.function.name, chars: retry.result.length, truncated: retry.result.startsWith('[truncated:'), result: retry.result });
             allMessages.push(toolResultMessage(tc, retry.result));
           } else if (policy.onToolError === 'nudge') {
+            emitEvent(policy, { event: 'nudge', tool: tc.function.name });
             allMessages.push(toolResultMessage(tc, result));
             allMessages.push({ role: 'user', content: 'that tool errored, try again' });
           }

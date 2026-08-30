@@ -20,12 +20,12 @@ export function buildClientConfig(opts: { modelOverride?: string | null }): Clie
 export async function chat(
   messages: Message[],
   tools: ToolDefinition[],
-  verbose = false,
   modelOverride?: string | null,
 ): Promise<{
   message: Message;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   finish_reason: string;
+  reasoning: string;
 }> {
   const config = buildClientConfig({ modelOverride });
   const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL });
@@ -49,16 +49,9 @@ export async function chat(
   const choice = response.choices[0];
   const raw = choice.message;
 
-  if (verbose) {
-    // Some providers put reasoning in a non-standard field.
-    const anyRaw = raw as Record<string, unknown>;
-    if (anyRaw['reasoning'] || anyRaw['reasoning_content']) {
-      const reasoning = (anyRaw['reasoning'] ?? anyRaw['reasoning_content']) as string;
-      if (reasoning) {
-        process.stderr.write(`[reasoning] ${reasoning}\n`);
-      }
-    }
-  }
+  // Extract reasoning from non-standard field (lunaroute/GLM gateway uses 'reasoning').
+  const anyRaw = raw as Record<string, unknown>;
+  const reasoning = typeof anyRaw['reasoning'] === 'string' ? anyRaw['reasoning'] : '';
 
   const message: Message = {
     role: raw.role,
@@ -86,5 +79,6 @@ export async function chat(
       total_tokens: usage.total_tokens,
     },
     finish_reason: choice.finish_reason ?? 'stop',
+    reasoning,
   };
 }
