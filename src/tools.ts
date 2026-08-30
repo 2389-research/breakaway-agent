@@ -156,6 +156,33 @@ const bash: Tool = {
   },
 };
 
+// ── verifySpawn ───────────────────────────────────────────────────────────────
+// Exported seam: wait waitMs, then check if pid is alive.
+// If dead, read the errFile best-effort and return its head (500 chars or 8 lines, whichever smaller).
+
+export type VerifySpawnResult = { ok: true } | { ok: false; errHead: string };
+
+export async function verifySpawn(pid: number, errFile: string, waitMs: number): Promise<VerifySpawnResult> {
+  await Bun.sleep(waitMs);
+  try {
+    process.kill(pid, 0);
+    return { ok: true };
+  } catch {
+    // pid is dead — read errFile best-effort
+    let errHead = '';
+    try {
+      const raw = await Bun.file(errFile).text();
+      const lines = raw.split('\n');
+      const byLines = lines.slice(0, 8).join('\n');
+      const byChars = raw.slice(0, 500);
+      errHead = byLines.length <= byChars.length ? byLines : byChars;
+    } catch {
+      // unreadable — return empty
+    }
+    return { ok: false, errHead };
+  }
+}
+
 const spawnAgent: Tool = {
   definition: {
     type: 'function',
@@ -212,7 +239,15 @@ const spawnAgent: Tool = {
         ts: new Date().toISOString(),
       });
 
-      return `spawned child agent (pid ${pid})\nresults: read_file ${result.outFile}\nerrors: read_file ${result.errFile}\ncheck alive: bash: kill -0 ${pid}`;
+      // Verify the child is still alive after a short delay — nohup echoes a pid even for corpses.
+      const verify = await verifySpawn(pid, result.errFile, 700);
+      if (!verify.ok) {
+        const detail = verify.errHead ? `\n${verify.errHead}` : '';
+        return `error: child agent (pid ${pid}) died at boot${detail}`;
+      }
+
+      const registryPath = resolve(transcriptDir, 'agents.jsonl');
+      return `spawned child agent (pid ${pid})\nresults: read_file ${result.outFile}\nerrors: read_file ${result.errFile}\nstatus: read_file ${registryPath}`;
     } catch (err) {
       return `error: ${String(err)}`;
     }
