@@ -46,6 +46,10 @@ bun src/index.ts "describe the project" > answer.txt
 
 **Add a tool:** append one object `{definition, handler}` to the array in `src/tools.ts`. That's it.
 
+**Self-restart:** the `restart_self` tool re-execs the agent with the same argv
+(so a fresh Bun runtime picks up edits to `src/` or `system.txt`). Budget-capped
+at 3 restarts per run via the `BREAK_AWAY_RESTARTS` env counter.
+
 **Swap the system prompt:** pass `--system /path/to/your/prompt.txt`, or edit `system.txt` directly.
 
 **Change max turns or error policy:** edit `src/policy.ts`. `onToolError` accepts `'retry' | 'abort' | 'nudge'`.

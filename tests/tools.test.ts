@@ -140,3 +140,83 @@ describe('bash handler', () => {
     expect(result.length).toBeLessThan(9000);
   });
 });
+
+describe('restart_self handler', () => {
+  test('has restart_self tool', () => {
+    expect(findTool('restart_self')).toBeDefined();
+  });
+
+  test('definition is well-formed (no required args, spawn-safe)', () => {
+    const tool = findTool('restart_self')!;
+    expect(tool.definition.function.name).toBe('restart_self');
+    expect(tool.definition.function.parameters).toHaveProperty('properties');
+  });
+
+  test('refuses to restart when budget is exhausted', async () => {
+    const tool = findTool('restart_self')!;
+    const prev = process.env.BREAK_AWAY_RESTARTS;
+    process.env.BREAK_AWAY_RESTARTS = '999';
+    try {
+      const result = await tool.handler({});
+      expect(result).toMatch(/error: restart budget exhausted/i);
+    } finally {
+      if (prev === undefined) delete process.env.BREAK_AWAY_RESTARTS;
+      else process.env.BREAK_AWAY_RESTARTS = prev;
+    }
+  });
+});
+
+describe('edit_file handler', () => {
+  test('has edit_file tool', () => {
+    expect(findTool('edit_file')).toBeDefined();
+  });
+
+  test('replaces a unique occurrence', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    await Bun.write(filePath, 'const x = 1;\nconst y = 2;\n');
+    const tool = findTool('edit_file')!;
+    const result = await tool.handler({ path: filePath, old_string: 'const y = 2;', new_string: 'const y = 42;' });
+    expect(result).toContain('1 occurrence');
+    const readTool = findTool('read_file')!;
+    expect(await readTool.handler({ path: filePath })).toBe('const x = 1;\nconst y = 42;\n');
+  });
+
+  test('errors when old_string is not found', async () => {
+    const filePath = join(tmpDir, 'missing.txt');
+    await Bun.write(filePath, 'nothing to see here');
+    const tool = findTool('edit_file')!;
+    const result = await tool.handler({ path: filePath, old_string: 'not present', new_string: 'x' });
+    expect(result).toMatch(/error: old_string not found/i);
+    expect(await findTool('read_file')!.handler({ path: filePath })).toBe('nothing to see here');
+  });
+
+  test('errors when old_string matches multiple times without replace_all', async () => {
+    const filePath = join(tmpDir, 'dup.txt');
+    await Bun.write(filePath, 'aaa\naaa\n');
+    const tool = findTool('edit_file')!;
+    const result = await tool.handler({ path: filePath, old_string: 'aaa', new_string: 'bbb' });
+    expect(result).toMatch(/error: old_string occurs 2 times/i);
+    expect(await findTool('read_file')!.handler({ path: filePath })).toBe('aaa\naaa\n');
+  });
+
+  test('replace_all swaps every occurrence', async () => {
+    const filePath = join(tmpDir, 'all.txt');
+    await Bun.write(filePath, 'aaa bbb aaa\n');
+    const tool = findTool('edit_file')!;
+    const result = await tool.handler({ path: filePath, old_string: 'aaa', new_string: 'ccc', replace_all: true });
+    expect(result).toContain('2 occurrences');
+    expect(await findTool('read_file')!.handler({ path: filePath })).toBe('ccc bbb ccc\n');
+  });
+
+  test('rejects empty old_string', async () => {
+    const tool = findTool('edit_file')!;
+    const result = await tool.handler({ path: join(tmpDir, 'x.txt'), old_string: '', new_string: 'y' });
+    expect(result).toMatch(/error/i);
+  });
+
+  test('returns error string for missing file (no throw)', async () => {
+    const tool = findTool('edit_file')!;
+    const result = await tool.handler({ path: join(tmpDir, 'nonexistent.txt'), old_string: 'a', new_string: 'b' });
+    expect(result).toMatch(/error/i);
+  });
+});
