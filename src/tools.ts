@@ -110,7 +110,7 @@ const bash: Tool = {
       clearTimeout(timer);
 
       if (timedOut) {
-        const partial = stdoutBuf + stderrBuf;
+        const partial = cap(stdoutBuf + stderrBuf);
         return `[timed out after ${timeoutMs}ms — process killed]${partial ? `\npartial output:\n${partial}` : ''}`;
       }
 

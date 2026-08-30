@@ -128,4 +128,15 @@ describe('bash handler', () => {
     expect(result).toMatch(/timed out/i);
     expect(result).toContain('200');
   });
+
+  test('partial output on timeout is still capped', async () => {
+    const tool = findTool('bash')!;
+    // Flood stdout beyond the 8000-char cap, then hang until killed
+    const result = await tool.handler({
+      cmd: 'head -c 20000 /dev/zero | tr "\\0" "x"; sleep 10',
+      timeout_ms: 500,
+    });
+    expect(result).toMatch(/timed out/i);
+    expect(result.length).toBeLessThan(9000);
+  });
 });
