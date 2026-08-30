@@ -81,3 +81,26 @@ spawn_agent(task="...", cwd="/path/to/work")
 The child runs `bun src/index.ts` in the background. Its stdout goes to a `spawn-<ts>.out` file in the transcript directory; stderr to `spawn-<ts>.err`. The parent gets back the pid and file paths immediately.
 
 Agent depth is tracked via `BREAK_AWAY_DEPTH` (default 0). `BREAK_AWAY_MAX_DEPTH` (default 3) caps nesting — spawn_agent returns an error rather than launching when the cap is reached.
+
+## Building a binary
+
+```sh
+bun run build
+```
+
+Produces a self-contained `break-away` binary (~61 MB) via `bun build --compile`. Run it from any directory:
+
+```sh
+./break-away "describe the project"
+```
+
+**What works in the binary (everything):**
+- All tools (read_file, write_file, bash, spawn_agent), subagents, REPL
+- Transcripts — written to `~/.break-away/transcripts/` (or `$BREAK_AWAY_TRANSCRIPT_DIR`)
+- `.env` is picked up automatically from the launch directory
+
+**What doesn't work (inherent limit):**
+- Self-modification / hot-reload — the binary is a frozen snapshot; `SIGHUP` warns instead of reloading. Rebuild to pick up source changes.
+- `/reload` in REPL has the same limit — it will report a failure; rebuild instead.
+
+Per-experiment configuration: drop a `.env` in whatever directory you launch the binary from.
