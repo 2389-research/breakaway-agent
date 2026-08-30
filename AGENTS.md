@@ -9,7 +9,8 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
 ## What this is
 
 - `bun src/index.ts "task"` — one-shot. `bun src/index.ts` — REPL.
-- Flags: `--cwd`, `--model`, `--system`, `--max-turns`, `--verbose`, `--help`.
+- Flags: `--cwd`, `--model`, `--system`, `--max-turns`, `--quiet`, `--debug`, `--help`.
+- Output tiers: `--quiet` (tool calls + stats), default `rich` (reasoning + interim prose + tool snippets), `--debug` (rich + api_ms + longer excerpts). `--quiet` and `--debug` are mutually exclusive.
 - **Pure YOLO by design**: no permission prompts, no sandbox, no confirmation
   gates. The agent executes whatever the model asks. This is intentional
   (Doc Bizmarkie's explicit call) — do not add gates or y/N prompts.

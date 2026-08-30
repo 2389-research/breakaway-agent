@@ -13,10 +13,10 @@ function args(...rest: string[]): string[] {
 }
 
 describe('parseArgs — basic flags', () => {
-  test('no args: task is null, defaults apply', () => {
+  test('no args: task is null, tier defaults to rich', () => {
     const result = parseArgs(args());
     expect(result.task).toBeNull();
-    expect(result.verbose).toBe(false);
+    expect(result.tier).toBe('rich');
   });
 
   test('positional arg becomes task', () => {
@@ -24,10 +24,9 @@ describe('parseArgs — basic flags', () => {
     expect(result.task).toBe('hello world task');
   });
 
-  test('--verbose sets verbose', () => {
+  test('--verbose is an unknown flag (replaced by --debug)', () => {
     const result = parseArgs(args('--verbose', 'do the thing'));
-    expect(result.verbose).toBe(true);
-    expect(result.task).toBe('do the thing');
+    expect(result.unknownFlag).toBe('--verbose');
   });
 
   test('--system sets systemPath', () => {
