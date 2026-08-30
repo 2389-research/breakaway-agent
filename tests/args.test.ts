@@ -1,4 +1,4 @@
-// ABOUTME: Tests for CLI arg parsing — flags --cwd, --model, --system, --verbose, --help.
+// ABOUTME: Tests for CLI arg parsing — flags --cwd, --model, --system, --quiet, --debug, --help.
 // ABOUTME: Tests parseArgs exported from index.ts; no I/O, no network.
 
 import { describe, test, expect } from 'bun:test';

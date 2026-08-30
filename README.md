@@ -32,11 +32,12 @@ bun src/index.ts
 --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL)
 --system <path>  Path to system prompt file (default: system.txt)
 --max-turns <n>  Override the loop turn budget (default: policy's maxTurns)
---verbose        Print model reasoning (if supported by provider)
+--quiet          Minimal progress: tool calls and stats only
+--debug          Rich view plus API timing and fuller result excerpts
 --help           Print this help and exit
 ```
 
-In one-shot mode, only the model's final answer goes to stdout. Stats and progress go to stderr. That means you can pipe the answer cleanly:
+The default view shows the model's reasoning, its dialog between tool calls, and a snippet of each tool result — all on stderr. In one-shot mode, only the model's final answer goes to stdout. Stats and progress go to stderr. That means you can pipe the answer cleanly:
 ```sh
 bun src/index.ts "describe the project" > answer.txt
 ```

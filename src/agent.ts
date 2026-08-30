@@ -13,12 +13,6 @@ function emitEvent(policy: Policy, event: Record<string, unknown>): void {
   }
 }
 
-function argsPreview(argsJson: string): string {
-  const MAX = 60;
-  if (argsJson.length <= MAX) return argsJson;
-  return argsJson.slice(0, MAX) + '...';
-}
-
 async function executeToolCall(
   tc: ToolCall,
   tools: Tool[],
@@ -54,9 +48,6 @@ function toolResultMessage(tc: ToolCall, result: string): Message {
     name: tc.function.name,
   };
 }
-
-// Suppress the unused-args-preview export — kept internal now.
-export { argsPreview as _argsPreview };
 
 export async function run(
   messages: Message[],
