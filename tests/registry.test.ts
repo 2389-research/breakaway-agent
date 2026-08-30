@@ -12,6 +12,7 @@ import {
   diffAgentStates,
   type AgentRecord,
   type AgentState,
+  type AgentTransition,
 } from '../src/registry.ts';
 
 let tmpDir: string;
@@ -151,6 +152,27 @@ describe('deriveAgentStates', () => {
     expect(s!.task).toBe('spawned');
     expect(s!.parentPid).toBe(process.pid);
   });
+
+  test('agent_done status and stop_reason pass through to AgentState', () => {
+    const records: AgentRecord[] = [
+      { event: 'agent_start', pid: 12345, parent_pid: null, depth: 0, task: 't', cwd: '/tmp', ts: new Date().toISOString() },
+      { event: 'agent_done', pid: 12345, ts: new Date().toISOString(), status: 'error', stop_reason: 'aborted' },
+    ];
+    const states = deriveAgentStates(records);
+    const s = states.get(12345);
+    expect(s?.state).toBe('done');
+    expect(s?.exitStatus).toBe('error');
+    expect(s?.stopReason).toBe('aborted');
+  });
+
+  test('agent_done without status leaves exitStatus undefined', () => {
+    const records: AgentRecord[] = [
+      { event: 'agent_start', pid: 12345, parent_pid: null, depth: 0, task: 't', cwd: '/tmp', ts: new Date().toISOString() },
+      { event: 'agent_done', pid: 12345, ts: new Date().toISOString() },
+    ];
+    const states = deriveAgentStates(records);
+    expect(states.get(12345)?.exitStatus).toBeUndefined();
+  });
 });
 
 // ── diffAgentStates ──────────────────────────────────────────────────────────
@@ -174,26 +196,27 @@ describe('diffAgentStates', () => {
   test('reports done transition for a direct child', () => {
     const prev = new Map([[5, mk(5, 'running', 0)]]);
     const next = new Map([[5, mk(5, 'done', 0)]]);
-    const lines = diffAgentStates(prev, next, 0);
-    expect(lines.length).toBe(1);
-    expect(lines[0]).toContain('done');
-    expect(lines[0]).toContain('5');
+    const transitions = diffAgentStates(prev, next, 0);
+    expect(transitions.length).toBe(1);
+    expect(transitions[0].state).toBe('done');
+    expect(transitions[0].pid).toBe(5);
   });
 
   test('reports died transition for a direct child', () => {
     const prev = new Map([[6, mk(6, 'running', 0)]]);
     const next = new Map([[6, mk(6, 'died', 0)]]);
-    const lines = diffAgentStates(prev, next, 0);
-    expect(lines.length).toBe(1);
-    expect(lines[0]).toContain('died');
+    const transitions = diffAgentStates(prev, next, 0);
+    expect(transitions.length).toBe(1);
+    expect(transitions[0].state).toBe('died');
+    expect(transitions[0].pid).toBe(6);
   });
 
   test('ignores non-direct-children (different parentPid)', () => {
     const prev = new Map([[9, mk(9, 'running', 99)]]);
     const next = new Map([[9, mk(9, 'done', 99)]]);
     // Our pid is 0, child's parentPid is 99 — not a direct child
-    const lines = diffAgentStates(prev, next, 0);
-    expect(lines).toEqual([]);
+    const transitions = diffAgentStates(prev, next, 0);
+    expect(transitions).toEqual([]);
   });
 
   test('reports multiple transitions in one pass', () => {
@@ -205,7 +228,18 @@ describe('diffAgentStates', () => {
       [10, mk(10, 'done', 0)],
       [11, mk(11, 'died', 0)],
     ]);
-    const lines = diffAgentStates(prev, next, 0);
-    expect(lines.length).toBe(2);
+    const transitions = diffAgentStates(prev, next, 0);
+    expect(transitions.length).toBe(2);
+  });
+
+  test('done transition carries exitStatus and stopReason', () => {
+    const base = mk(20, 'running', 0);
+    const doneState: AgentState = { ...mk(20, 'done', 0), exitStatus: 'error', stopReason: 'aborted' };
+    const prev = new Map([[20, base]]);
+    const next = new Map([[20, doneState]]);
+    const transitions = diffAgentStates(prev, next, 0);
+    expect(transitions.length).toBe(1);
+    expect(transitions[0].exitStatus).toBe('error');
+    expect(transitions[0].stopReason).toBe('aborted');
   });
 });

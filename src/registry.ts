@@ -30,6 +30,8 @@ export type AgentDoneRecord = {
   event: 'agent_done';
   pid: number;
   ts: string;
+  status?: 'ok' | 'error';
+  stop_reason?: string;
 };
 
 export type AgentRecord = AgentSpawnRecord | AgentStartRecord | AgentDoneRecord;
@@ -43,6 +45,8 @@ export type AgentState = {
   task: string;
   startTs: string;
   errFile: string | undefined;
+  exitStatus?: 'ok' | 'error';
+  stopReason?: string;
 };
 
 // ── Growth cap ────────────────────────────────────────────────────────────────
@@ -67,7 +71,7 @@ function pruneIfNeeded(path: string): void {
 
 // ── I/O ───────────────────────────────────────────────────────────────────────
 
-export async function appendRecord(path: string, record: Omit<AgentRecord, never>): Promise<void> {
+export async function appendRecord(path: string, record: AgentRecord): Promise<void> {
   try {
     mkdirSync(dirname(path), { recursive: true });
     pruneIfNeeded(path);
@@ -112,7 +116,15 @@ function isPidAlive(pid: number): boolean {
 
 export function deriveAgentStates(records: AgentRecord[]): Map<number, AgentState> {
   // Build per-pid metadata from records in order.
-  const meta = new Map<number, { parentPid: number | null; task: string; startTs: string; errFile: string | undefined; done: boolean }>();
+  const meta = new Map<number, {
+    parentPid: number | null;
+    task: string;
+    startTs: string;
+    errFile: string | undefined;
+    done: boolean;
+    exitStatus?: 'ok' | 'error';
+    stopReason?: string;
+  }>();
 
   for (const r of records) {
     if (r.event === 'agent_spawn') {
@@ -124,6 +136,8 @@ export function deriveAgentStates(records: AgentRecord[]): Map<number, AgentStat
         startTs: r.ts,
         errFile: r.err,
         done: prev?.done ?? false,
+        exitStatus: prev?.exitStatus,
+        stopReason: prev?.stopReason,
       });
     } else if (r.event === 'agent_start') {
       // Process's own boot record — more authoritative on parentPid/task.
@@ -134,6 +148,8 @@ export function deriveAgentStates(records: AgentRecord[]): Map<number, AgentStat
         startTs: r.ts,
         errFile: prev?.errFile,
         done: prev?.done ?? false,
+        exitStatus: prev?.exitStatus,
+        stopReason: prev?.stopReason,
       });
     } else if (r.event === 'agent_done') {
       const prev = meta.get(r.pid);
@@ -143,6 +159,8 @@ export function deriveAgentStates(records: AgentRecord[]): Map<number, AgentStat
         startTs: prev?.startTs ?? r.ts,
         errFile: prev?.errFile,
         done: true,
+        exitStatus: r.status,
+        stopReason: r.stop_reason,
       });
     }
   }
@@ -164,6 +182,8 @@ export function deriveAgentStates(records: AgentRecord[]): Map<number, AgentStat
       task: m.task,
       startTs: m.startTs,
       errFile: m.errFile,
+      exitStatus: m.exitStatus,
+      stopReason: m.stopReason,
     });
   }
   return states;
@@ -171,12 +191,20 @@ export function deriveAgentStates(records: AgentRecord[]): Map<number, AgentStat
 
 // ── Poller diff (pure) ────────────────────────────────────────────────────────
 
+export type AgentTransition = {
+  pid: number;
+  state: 'done' | 'died';
+  ageSecs: number;
+  exitStatus?: 'ok' | 'error';
+  stopReason?: string;
+};
+
 export function diffAgentStates(
   prev: Map<number, AgentState>,
   next: Map<number, AgentState>,
   ourPid: number,
-): string[] {
-  const lines: string[] = [];
+): AgentTransition[] {
+  const transitions: AgentTransition[] = [];
   for (const [pid, nextState] of next) {
     if (nextState.parentPid !== ourPid) continue; // only direct children
     const prevState = prev.get(pid);
@@ -188,10 +216,10 @@ export function diffAgentStates(
     const ageSecs = Math.round(ageMs / 1000);
 
     if (nextState.state === 'done') {
-      lines.push(`◆ agent ${pid} done (${ageSecs}s)`);
+      transitions.push({ pid, state: 'done', ageSecs, exitStatus: nextState.exitStatus, stopReason: nextState.stopReason });
     } else if (nextState.state === 'died') {
-      lines.push(`✗ agent ${pid} died (${ageSecs}s)`);
+      transitions.push({ pid, state: 'died', ageSecs });
     }
   }
-  return lines;
+  return transitions;
 }
