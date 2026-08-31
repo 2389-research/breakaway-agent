@@ -14,6 +14,7 @@ export type AgentSpawnRecord = {
   out: string;
   err: string;
   ts: string;
+  detached?: boolean; // fire-and-forget: onFinish will not gather this child
 };
 
 export type AgentStartRecord = {

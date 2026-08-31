@@ -342,6 +342,11 @@ const spawnAgent: Tool = {
         properties: {
           task: { type: 'string', description: 'Task for the child agent to perform.' },
           cwd: { type: 'string', description: 'Working directory for the child. Defaults to current cwd.' },
+          detach: {
+            type: 'boolean',
+            description:
+              'Fire-and-forget: if true, this child is NOT gathered into your context when you finish. Default false (its result is delivered to you automatically).',
+          },
         },
         required: ['task'],
       },
@@ -351,6 +356,7 @@ const spawnAgent: Tool = {
     if (typeof args['task'] !== 'string' || args['task'] === '') return missingField('task');
     const task = args['task'];
     const taskCwd = (args['cwd'] as string | undefined) ?? process.cwd();
+    const detach = args['detach'] === true;
     const depth = Number(process.env.BREAK_AWAY_DEPTH ?? '0');
     const maxDepth = Number(process.env.BREAK_AWAY_MAX_DEPTH ?? '3');
     const transcriptDir = defaultTranscriptDir(TOOLS_SOURCE_DIR);
@@ -384,6 +390,7 @@ const spawnAgent: Tool = {
         out: result.outFile,
         err: result.errFile,
         ts: new Date().toISOString(),
+        detached: detach,
       });
 
       // Verify the child is still alive after a short delay — nohup echoes a pid even for corpses.

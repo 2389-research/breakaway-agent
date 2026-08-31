@@ -54,6 +54,16 @@ export type Policy = {
   // Every N turns, inject a strategy-checkpoint prompt so a long run re-focuses and its evidence
   // trail gets a compaction anchor. 0 or undefined disables it. Default 40.
   strategyCheckpointEvery?: number;
+  // Awaited inside the 'done' branch before the completion audit. Returns messages to inject (e.g.
+  // finished child-agent results); the loop then continues so the model incorporates them. null or
+  // empty lets the finish proceed. `emit` is the loop's own event emitter, handed in so the seam can
+  // surface its own events without the loop knowing their shape.
+  onFinish?: (
+    messages: Message[],
+    emit: (event: Record<string, unknown>) => void,
+  ) => Promise<Message[] | null>;
+  // Max total time the default onFinish (child gather) waits for still-running children (default 300000).
+  childWaitMs?: number;
 };
 
 export type FinalState = {

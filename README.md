@@ -55,7 +55,8 @@ The model drives five tools:
 - `write_file(path, content)` — create or overwrite a file.
 - `edit_file(path, old_text, new_text)` — exact-match, single-occurrence replacement written atomically. Refuses (unchanged file) if `old_text` matches zero times or more than once.
 - `bash(cmd, timeout_ms?)` — run a shell command; on timeout the whole process group is killed. Output is capped to the last 8000 chars.
-- `spawn_agent(task, cwd?)` — launch a detached child agent (see Subagents).
+- `spawn_agent(task, cwd?, detach?)` — launch a child agent (see Subagents). By default its
+  result is gathered into your context when you finish; pass `detach: true` for fire-and-forget.
 
 ## Hacking it
 

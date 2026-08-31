@@ -13,6 +13,7 @@ import {
   type AgentRecord,
   type AgentState,
   type AgentTransition,
+  type AgentSpawnRecord,
 } from '../src/registry.ts';
 
 let tmpDir: string;
@@ -231,6 +232,15 @@ describe('diffAgentStates', () => {
     const transitions = diffAgentStates(prev, next, 0);
     expect(transitions.length).toBe(2);
   });
+
+test('agent_spawn round-trips the detached flag', async () => {
+  await appendRecord(registryPath, {
+    event: 'agent_spawn', pid: 7, parent_pid: 1, task: 't', out: '/o', err: '/e', ts: 'ts', detached: true,
+  });
+  const recs = await readRegistry(registryPath);
+  const spawn = recs.find((r) => r.event === 'agent_spawn') as AgentSpawnRecord;
+  expect(spawn.detached).toBe(true);
+});
 
   test('done transition carries exitStatus and stopReason', () => {
     const base = mk(20, 'running', 0);

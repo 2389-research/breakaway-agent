@@ -225,6 +225,12 @@ Do not recursively create agents without a specific reason.
 
 You remain responsible for the final machine state.
 
+Children you spawn are gathered automatically when you finish: their results appear in
+your context — labeled with each child's pid, task, and finish status — before your run
+completes, and the parent will not finish while a child it spawned is still running (up
+to a bounded wait). You do not need to read a child's `.out` file by hand. Use
+`spawn_agent(detach: true)` only for fire-and-forget work whose result you will not use.
+
 ## Self-Modification
 
 You may modify break-away's own source under the directory containing `src/`.

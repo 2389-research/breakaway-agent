@@ -3,6 +3,8 @@
 
 import type { Policy, Message } from './types.ts';
 import { STRATEGY_CHECKPOINT_MARKER } from './agent.ts';
+import { gatherChildren } from './children.ts';
+import { defaultTranscriptDir } from './transcript.ts';
 
 // Rolling evidence compaction. The model's view collapses raw exploration before the last COMPLETED
 // strategy checkpoint down to just the checkpoint summaries, keeping system + task + every prior
@@ -34,6 +36,13 @@ export function compactByCheckpoints(messages: Message[]): Message[] {
   return view;
 }
 
+const POLICY_SOURCE_DIR = import.meta.dir;
+// Bounded so a hung child can never wedge the parent's finish forever; generous enough for real work.
+const CHILD_WAIT_MS = 300000; // 5 min
+// Process-lifetime record of delivered child pids, so each child's result lands exactly once across
+// repeated finishes. Owned here and injected into gatherChildren.
+const deliveredChildPids = new Set<number>();
+
 export const defaultPolicy: Policy = {
   // No turn limit by default: a run finishes when the model does, not at an arbitrary count.
   // `--max-turns N` sets an explicit safety/debug cap; hitting it is an incomplete (nonzero) exit.
@@ -58,6 +67,17 @@ export const defaultPolicy: Policy = {
   completionAudit: true,
   // Re-focus + compaction anchor every 40 turns; a short run never reaches it, so trivial tasks pay nothing.
   strategyCheckpointEvery: 40,
+  childWaitMs: CHILD_WAIT_MS,
+  // Default finish hook: gather finished direct children into context before accepting a finish.
+  // Overriding the wait means overriding onFinish too — this is the experiment surface.
+  onFinish: (messages, emit) =>
+    gatherChildren(messages, {
+      selfPid: process.pid,
+      transcriptDir: defaultTranscriptDir(POLICY_SOURCE_DIR),
+      deliveredPids: deliveredChildPids,
+      waitMs: CHILD_WAIT_MS,
+      emit,
+    }),
 };
 
 // The "I mean business" profile (--serious): extra blip-survival on top of the default. The

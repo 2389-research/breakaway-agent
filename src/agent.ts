@@ -279,6 +279,19 @@ export async function run(
     if (finish === 'done') {
       // A real answer clears any prior blank streak.
       emptyResponses = 0;
+
+      // Gather results from any children we spawned before accepting the finish, so their work
+      // lands in context (and the audit can see it). onFinish is subagent-agnostic from the loop's
+      // view — the registry I/O lives behind the seam. deliveredPids (owned by the default onFinish)
+      // makes the second pass return null, so this never loops forever.
+      if (policy.onFinish) {
+        const gathered = await policy.onFinish(allMessages, (e) => emitEvent(policy, e));
+        if (gathered && gathered.length > 0) {
+          for (const m of gathered) allMessages.push(m);
+          continue;
+        }
+      }
+
       // Completion audit: give the model exactly one enforced chance to verify before we accept
       // a no-tool finish as done. Only fire when at least one more turn of budget remains
       // (turns < maxTurns - 1) so the injected audit turn can actually run; at an explicit

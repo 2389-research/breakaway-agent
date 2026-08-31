@@ -71,6 +71,11 @@ Launches a detached child agent via `nohup bun src/index.ts ... &` in source mod
 
 The spawn renders a `◆ spawned agent <pid>` block to stderr immediately. A 2-second background poll watches for state transitions and prints `◆ agent <pid> done (<age>s)` or `✗ agent <pid> died (<age>s)` to stderr as they happen. After one-shot completes, still-running children are listed with `tail -f` hints.
 
+By default a spawned child is *awaited*: when the parent finishes, `onFinish` (the default
+gather in `src/children.ts`) pulls each finished direct child's redacted `.out` into the
+parent's context before the run completes. `spawn_agent(detach: true)` marks the record
+`detached` so the gather skips it (true fire-and-forget).
+
 **Registry:** every agent writes to `agents.jsonl` in the transcript directory (`BREAK_AWAY_TRANSCRIPT_DIR`, or `~/.break-away/transcripts` in binary mode). Records: `agent_spawn` (parent writes it), `agent_start` (child writes at boot), `agent_done` (child writes on clean exit). State is derived live via `process.kill(pid, 0)` — done > running > died.
 
 ## Binary mode (`bun run build`)

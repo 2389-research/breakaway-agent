@@ -184,6 +184,21 @@ export function render(event: Record<string, unknown>, config: RenderConfig, wri
       return;
     }
 
+    case 'child_result': {
+      if (config.tier === 'quiet') return;
+      const pid = event.pid as number;
+      const status = String(event.status ?? '');
+      writer(`${CYAN(config)}${BOLD(config)}◆ child ${pid} result [${status}]${RESET(config)}\n`);
+      return;
+    }
+
+    case 'awaiting_children': {
+      if (config.tier === 'quiet') return;
+      const pids = Array.isArray(event.pids) ? (event.pids as number[]) : [];
+      writer(`${DIM(config)}… awaiting ${pids.length} child agent(s)${RESET(config)}\n`);
+      return;
+    }
+
     default:
       // Unknown event type — silently ignore.
       return;

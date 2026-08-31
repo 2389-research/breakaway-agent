@@ -722,6 +722,63 @@ describe('agent run — strategy checkpoint', () => {
   });
 });
 
+describe('agent run — onFinish (child gather)', () => {
+  test('onFinish results are injected and the model finishes after incorporating them', async () => {
+    mockChat.mockResolvedValue({
+      message: { role: 'assistant', content: 'final answer' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      finish_reason: 'stop',
+    });
+
+    let calls = 0;
+    const onFinish = async () => {
+      calls++;
+      return calls === 1 ? [{ role: 'user' as const, content: 'Child agent 1 finished [done]:\nresult' }] : null;
+    };
+
+    const state = await run(initialMessages(), [], makePolicy({ onFinish }));
+    expect(state.stopReason).toBe('done');
+    expect(calls).toBe(2); // once returns a message (continue), once returns null (proceed)
+    expect(state.turns).toBe(2);
+    const injected = state.messages.find(
+      (m) => m.role === 'user' && String(m.content).includes('Child agent 1 finished'),
+    );
+    expect(injected).toBeDefined();
+  });
+
+  test('onFinish returning null lets the finish proceed unchanged', async () => {
+    mockChat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'done' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      finish_reason: 'stop',
+    });
+    let calls = 0;
+    const onFinish = async () => { calls++; return null; };
+    const state = await run(initialMessages(), [], makePolicy({ onFinish }));
+    expect(state.stopReason).toBe('done');
+    expect(calls).toBe(1);
+    expect(state.turns).toBe(1);
+  });
+
+  test('onFinish runs before the completion audit', async () => {
+    const order: string[] = [];
+    mockChat.mockResolvedValue({
+      message: { role: 'assistant', content: 'answer' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      finish_reason: 'stop',
+    });
+    const onFinish = async () => { order.push('finish'); return null; };
+    await run(initialMessages(), [], makePolicy({
+      completionAudit: true,
+      onFinish,
+      onEvent: (e) => { if (e.event === 'completion_audit') order.push('audit'); },
+    }));
+    expect(order[0]).toBe('finish');
+    expect(order).toContain('audit');
+    expect(order.indexOf('finish')).toBeLessThan(order.indexOf('audit'));
+  });
+});
+
 describe('agent run — honest completion (a blank finish is not success)', () => {
   const emptyFinish = () => ({
     message: { role: 'assistant' as const, content: '' },

@@ -187,6 +187,27 @@ describe('render — strategy_checkpoint', () => {
   });
 });
 
+// ── child_result / awaiting_children ────────────────────────────────────────
+
+describe('render — child_result', () => {
+  test('rich: shows child pid and status', () => {
+    const out = collect({ event: 'child_result', pid: 4242, task: 't', status: 'done' }, RICH);
+    expect(out).toContain('child 4242');
+    expect(out).toContain('done');
+  });
+
+  test('quiet: omits it', () => {
+    expect(collect({ event: 'child_result', pid: 4242, status: 'done' }, QUIET)).toBe('');
+  });
+});
+
+describe('render — awaiting_children', () => {
+  test('rich: shows the count', () => {
+    const out = collect({ event: 'awaiting_children', pids: [1, 2, 3] }, RICH);
+    expect(out).toContain('awaiting 3');
+  });
+});
+
 // ── unknown events ────────────────────────────────────────────────────────────
 
 describe('render — unknown events', () => {
