@@ -45,6 +45,12 @@ function cap(output: string): string {
   return `[truncated: showing last ${OUTPUT_CAP} of ${output.length} chars]\n` + tail;
 }
 
+// Validate a required argument before it reaches the real operation. Models mis-key args
+// (e.g. {command} instead of {cmd}), which used to send `undefined` into the shell or file API.
+function missingField(field: string, detail = 'expected a non-empty string'): string {
+  return `error: missing required field: ${field} (${detail})`;
+}
+
 const readFile: Tool = {
   definition: {
     type: 'function',
@@ -61,7 +67,8 @@ const readFile: Tool = {
     },
   },
   async handler(args) {
-    const filePath = args['path'] as string;
+    if (typeof args['path'] !== 'string' || args['path'] === '') return missingField('path');
+    const filePath = args['path'];
     try {
       const file = Bun.file(filePath);
       const text = await file.text();
@@ -89,8 +96,11 @@ const writeFile: Tool = {
     },
   },
   async handler(args) {
-    const filePath = args['path'] as string;
-    const content = args['content'] as string;
+    if (typeof args['path'] !== 'string' || args['path'] === '') return missingField('path');
+    // An empty file is a legitimate write, so content only has to be a string.
+    if (typeof args['content'] !== 'string') return missingField('content', 'expected a string');
+    const filePath = args['path'];
+    const content = args['content'];
     try {
       await Bun.write(filePath, content);
       return `wrote ${content.length} bytes to ${filePath}`;
@@ -122,18 +132,27 @@ const bash: Tool = {
     },
   },
   async handler(args) {
-    const cmd = args['cmd'] as string;
-    const timeoutMs = (args['timeout_ms'] as number | undefined) ?? BASH_DEFAULT_TIMEOUT_MS;
+    if (typeof args['cmd'] !== 'string' || args['cmd'] === '') return missingField('cmd');
+    const cmd = args['cmd'];
+    const rawTimeout = args['timeout_ms'];
+    const timeoutMs = typeof rawTimeout === 'number' && rawTimeout > 0 ? rawTimeout : BASH_DEFAULT_TIMEOUT_MS;
     try {
+      // detached: the child leads its own process group, so a timeout can SIGKILL the whole
+      // group. Without this, killing only bash orphans backgrounded children (nmap, `sleep &`),
+      // which keep the stdout pipe open and hang the read for their full lifetime.
       const proc = Bun.spawn(['bash', '-c', cmd], {
         stdout: 'pipe',
         stderr: 'pipe',
+        detached: true,
       });
 
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
-        proc.kill();
+        // Negative pid targets the whole group; the leader is included. Fall back to a
+        // direct kill if the group is already gone.
+        try { process.kill(-proc.pid, 'SIGKILL'); } catch { /* group already gone */ }
+        try { proc.kill(9); } catch { /* already gone */ }
       }, timeoutMs);
 
       const [stdoutBuf, stderrBuf, exitCode] = await Promise.all([
@@ -145,7 +164,7 @@ const bash: Tool = {
 
       if (timedOut) {
         const partial = cap(stdoutBuf + stderrBuf);
-        return `[timed out after ${timeoutMs}ms — process killed]${partial ? `\npartial output:\n${partial}` : ''}`;
+        return `[timed out after ${timeoutMs}ms — process group killed]${partial ? `\npartial output:\n${partial}` : ''}`;
       }
 
       const combined = `stdout:\n${stdoutBuf}\nstderr:\n${stderrBuf}\nexit: ${exitCode}`;
@@ -202,7 +221,8 @@ const spawnAgent: Tool = {
     },
   },
   async handler(args) {
-    const task = args['task'] as string;
+    if (typeof args['task'] !== 'string' || args['task'] === '') return missingField('task');
+    const task = args['task'];
     const taskCwd = (args['cwd'] as string | undefined) ?? process.cwd();
     const depth = Number(process.env.BREAK_AWAY_DEPTH ?? '0');
     const maxDepth = Number(process.env.BREAK_AWAY_MAX_DEPTH ?? '3');

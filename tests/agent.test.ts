@@ -133,6 +133,42 @@ describe('agent run — maxTurns', () => {
     expect(state.stopReason).toBe('maxTurns');
     expect(state.turns).toBe(3);
   });
+
+  test('reserves the final turn for synthesis: strips tools and returns a prose answer', async () => {
+    // Model keeps calling tools while any are offered, but produces prose when tools are stripped.
+    mockChat.mockImplementation(async (_messages: Message[], toolDefs: unknown[]) => {
+      if (toolDefs.length === 0) {
+        return {
+          message: { role: 'assistant' as const, content: 'best synthesis given the evidence so far' },
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+          finish_reason: 'stop',
+        };
+      }
+      return {
+        message: {
+          role: 'assistant' as const,
+          content: '',
+          tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'my_tool', arguments: '{}' } }],
+        },
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        finish_reason: 'tool_calls',
+      };
+    });
+
+    const state = await run(initialMessages(), [makeTool('my_tool')], makePolicy({ maxTurns: 3 }));
+
+    // Hitting the cap is still an incomplete outcome...
+    expect(state.stopReason).toBe('maxTurns');
+    // ...but the final message now carries a usable answer instead of an empty tool-call turn.
+    const last = state.messages[state.messages.length - 1];
+    expect(last.role).toBe('assistant');
+    expect(last.content).toBe('best synthesis given the evidence so far');
+
+    // The final API call was made with tools disabled; earlier calls had the tool available.
+    const calls = mockChat.mock.calls;
+    expect((calls[0][1] as unknown[]).length).toBe(1);
+    expect((calls[calls.length - 1][1] as unknown[]).length).toBe(0);
+  });
 });
 
 describe('agent run — onToolError abort', () => {
@@ -302,6 +338,40 @@ describe('agent run — onEvent observer', () => {
     expect(ev3.content).toBe('all done');
     expect(Array.isArray(ev3.tool_calls)).toBe(true);
     expect((ev3.tool_calls as unknown[]).length).toBe(0);
+  });
+
+  test('redacts secrets in tool output before they reach the model or transcript', async () => {
+    // Turn 1: model calls a tool that leaks a secret; Turn 2: model finishes.
+    mockChat.mockResolvedValueOnce({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'leaky', arguments: '{}' } }],
+      },
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      finish_reason: 'tool_calls',
+    });
+    mockChat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'ok' },
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      finish_reason: 'stop',
+    });
+
+    const secret = 'lr_livekey0123456789abcdef';
+    const events: Record<string, unknown>[] = [];
+    const leaky = makeTool('leaky', async () => `OPENAI_COMPATIBLE_API_KEY=${secret}`);
+
+    const state = await run(initialMessages(), [leaky], makePolicy({ onEvent: (e) => events.push(e) }));
+
+    // The tool message the model sees must not contain the secret.
+    const toolMsg = state.messages.find((m) => m.role === 'tool');
+    expect(toolMsg?.content).not.toContain(secret);
+    expect(toolMsg?.content).toContain('[REDACTED]');
+
+    // The transcript tool_result event must not contain the secret either.
+    const toolResultEvent = events.find((e) => e.event === 'tool_result');
+    expect(String(toolResultEvent?.result)).not.toContain(secret);
+    expect(String(toolResultEvent?.result)).toContain('[REDACTED]');
   });
 
   test('a throwing onEvent observer does not crash the run', async () => {

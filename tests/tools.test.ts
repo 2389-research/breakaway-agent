@@ -139,5 +139,69 @@ describe('bash handler', () => {
     expect(result).toMatch(/timed out/i);
     expect(result.length).toBeLessThan(9000);
   });
+
+  test('timeout kills the whole process group, not just the bash process', async () => {
+    const tool = findTool('bash')!;
+    const pidFile = join(tmpDir, 'child.pid');
+    // Fork a child that would outlive bash, record its pid, then hang until killed.
+    // This is the orphaned-nmap scenario: killing only bash leaves the child running.
+    const result = await tool.handler({
+      cmd: `sleep 30 & echo $! > '${pidFile}'; sleep 30`,
+      timeout_ms: 400,
+    });
+    expect(result).toMatch(/timed out/i);
+
+    await Bun.sleep(300); // let the group kill propagate
+    const childPid = parseInt((await Bun.file(pidFile).text()).trim(), 10);
+    expect(childPid).toBeGreaterThan(0);
+
+    let alive = false;
+    try {
+      process.kill(childPid, 0);
+      alive = true;
+    } catch {
+      // ESRCH — child is gone, which is what we want
+    }
+    if (alive) {
+      try { process.kill(childPid, 9); } catch { /* cleanup */ } // don't leak a real process
+    }
+    expect(alive).toBe(false);
+  });
+});
+
+describe('tool argument validation', () => {
+  test('bash rejects the wrong argument key without executing', async () => {
+    const tool = findTool('bash')!;
+    // Model sent {command} instead of {cmd} — must not execute `undefined`.
+    const result = await tool.handler({ command: 'echo LEAK' });
+    expect(result).toContain('missing required field: cmd');
+    expect(result).not.toContain('exit:'); // never reached the shell
+    expect(result).not.toContain('LEAK');
+  });
+
+  test('bash rejects a missing cmd', async () => {
+    const result = await findTool('bash')!.handler({});
+    expect(result).toContain('missing required field: cmd');
+  });
+
+  test('bash rejects a non-string cmd', async () => {
+    const result = await findTool('bash')!.handler({ cmd: 123 });
+    expect(result).toContain('missing required field: cmd');
+  });
+
+  test('read_file rejects a missing path', async () => {
+    const result = await findTool('read_file')!.handler({});
+    expect(result).toContain('missing required field: path');
+  });
+
+  test('write_file rejects a missing content', async () => {
+    const result = await findTool('write_file')!.handler({ path: join(tmpDir, 'x.txt') });
+    expect(result).toContain('missing required field: content');
+  });
+
+  test('spawn_agent rejects a missing task without spawning', async () => {
+    const result = await findTool('spawn_agent')!.handler({});
+    expect(result).toContain('missing required field: task');
+  });
 });
 

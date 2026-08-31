@@ -2,6 +2,7 @@
 // ABOUTME: run(messages, tools, policy) => FinalState. All behavior is injected through Policy.
 
 import { chat } from './client.ts';
+import { redactSecrets } from './redact.ts';
 import type { Message, Tool, Policy, FinalState, ToolCall } from './types.ts';
 
 function emitEvent(policy: Policy, event: Record<string, unknown>): void {
@@ -14,6 +15,15 @@ function emitEvent(policy: Policy, event: Record<string, unknown>): void {
 }
 
 async function executeToolCall(
+  tc: ToolCall,
+  tools: Tool[],
+): Promise<{ result: string; isError: boolean }> {
+  // Redact secrets at this single chokepoint so neither the model nor the transcript sees them.
+  const { result, isError } = await runToolCall(tc, tools);
+  return { result: redactSecrets(result), isError };
+}
+
+async function runToolCall(
   tc: ToolCall,
   tools: Tool[],
 ): Promise<{ result: string; isError: boolean }> {
@@ -64,10 +74,15 @@ export async function run(
   while (turns < policy.maxTurns) {
     const contextMessages = policy.contextStrategy(allMessages);
 
+    // Reserve the final turn for synthesis: strip tools so the model must answer in prose
+    // instead of spending its last turn on a tool call whose result no one reads.
+    const isFinalTurn = turns === policy.maxTurns - 1;
+    const activeToolDefs = isFinalTurn ? [] : toolDefs;
+
     let response: Awaited<ReturnType<typeof chat>>;
     const apiStart = Date.now();
     try {
-      response = await chat(contextMessages, toolDefs, modelOverride);
+      response = await chat(contextMessages, activeToolDefs, modelOverride);
     } catch (err) {
       allMessages.push({ role: 'assistant', content: `error: ${String(err)}` });
       return {
@@ -100,6 +115,18 @@ export async function run(
         args_chars: tc.function.arguments.length,
       })),
     });
+
+    // Final turn: tools were disabled, so this message is the best answer we can give.
+    // Return it as an incomplete (maxTurns) outcome rather than running tools or claiming 'done'.
+    if (isFinalTurn) {
+      return {
+        messages: allMessages,
+        turns,
+        usage,
+        elapsed: Date.now() - start,
+        stopReason: 'maxTurns',
+      };
+    }
 
     if (finishReason === 'tool_calls' || response.message.tool_calls?.length) {
       const tcs = response.message.tool_calls ?? [];
