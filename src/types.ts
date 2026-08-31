@@ -49,7 +49,7 @@ export type Policy = {
   // this many times to recover before ending with stopReason 'error' instead of a false 'done' (default 1).
   maxEmptyRetries?: number;
   // When true, a model's first no-tool finish triggers exactly one audit turn (tools re-enabled)
-  // to catch false victory before the run is accepted as done. Off by default; on in --serious.
+  // to catch false victory before the run is accepted as done. On by default (both profiles).
   completionAudit?: boolean;
   // Every N turns, inject a strategy-checkpoint prompt so a long run re-focuses and its evidence
   // trail gets a compaction anchor. 0 or undefined disables it. Default 40.
