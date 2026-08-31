@@ -389,3 +389,243 @@ describe('agent run — onEvent observer', () => {
     expect(state.stopReason).toBe('done');
   });
 });
+
+describe('agent run — API retry (survive transient errors)', () => {
+  test('retries a transient API error and completes instead of dying', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        // Mirror a real OpenAI APIError: a numeric .status rides on the thrown error.
+        throw Object.assign(new Error('bad gateway sk-should-not-leak'), { status: 503 });
+      }
+      return {
+        message: { role: 'assistant' as const, content: 'recovered' },
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        finish_reason: 'stop',
+      };
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1, onEvent: (e) => events.push(e) }),
+    );
+
+    // A single blip must not kill the run — this is the whole point of the fix.
+    expect(state.stopReason).toBe('done');
+    expect(calls).toBe(2);
+    // A retried API call is NOT a turn: the model only produced one real response.
+    expect(state.turns).toBe(1);
+
+    // The retry is observable to the TUI...
+    const retry = events.find((e) => e.event === 'api_retry');
+    expect(retry).toBeDefined();
+    expect(retry?.attempt).toBe(1);
+    expect(retry?.max_attempts).toBe(3);
+    // ...but the event must not leak the error payload — status only, no keys, no message body.
+    const reason = String(retry?.reason);
+    expect(reason).toContain('503');
+    expect(reason).not.toContain('sk-');
+  });
+
+  test('gives up after apiMaxAttempts transient failures and returns error', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      throw Object.assign(new Error('server exploded'), { status: 500 });
+    });
+
+    const state = await run(
+      initialMessages(),
+      [],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1 }),
+    );
+
+    expect(state.stopReason).toBe('error');
+    // Exactly apiMaxAttempts total tries — bounded, never infinite.
+    expect(calls).toBe(3);
+  });
+
+  test('does not retry a permanent client error', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      throw Object.assign(new Error('unauthorized'), { status: 401 });
+    });
+
+    const state = await run(
+      initialMessages(),
+      [],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1 }),
+    );
+
+    expect(state.stopReason).toBe('error');
+    // 401 is a permanent client error — one attempt, no wasted retries.
+    expect(calls).toBe(1);
+  });
+
+  test('a transient blip mid-run does not inflate the turn count', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        return {
+          message: {
+            role: 'assistant' as const,
+            content: '',
+            tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'my_tool', arguments: '{}' } }],
+          },
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+          finish_reason: 'tool_calls',
+        };
+      }
+      if (calls === 2) {
+        throw Object.assign(new Error('rate limited'), { status: 429 });
+      }
+      return {
+        message: { role: 'assistant' as const, content: 'done after blip' },
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        finish_reason: 'stop',
+      };
+    });
+
+    const state = await run(
+      initialMessages(),
+      [makeTool('my_tool')],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1 }),
+    );
+
+    expect(state.stopReason).toBe('done');
+    // Two real model responses = two turns; the 429 blip between them is not a turn.
+    expect(state.turns).toBe(2);
+    expect(calls).toBe(3);
+  });
+});
+
+describe('agent run — completion audit (catch false victory)', () => {
+  const noToolFinish = (content: string) => ({
+    message: { role: 'assistant' as const, content },
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    finish_reason: 'stop' as const,
+  });
+  const toolCall = (name: string) => ({
+    message: {
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id: 'tc1', type: 'function' as const, function: { name, arguments: '{}' } }],
+    },
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    finish_reason: 'tool_calls' as const,
+  });
+
+  test('a premature no-tool finish injects one audit turn, model then verifies with tools, ends done', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return noToolFinish('looks done to me'); // premature victory
+      if (calls === 2) return toolCall('verify'); // audit turn: model actually checks
+      return noToolFinish('verified against the tests, all good'); // genuine finish
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true, onEvent: (e) => events.push(e) }),
+    );
+
+    // The audit turned a premature stop into a verified completion — not maxTurns, not error.
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(3);
+    // Exactly one audit was triggered for the task.
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(1);
+    // The audit turn (call 2) was made WITH tools enabled, so the model could actually verify.
+    expect((mockChat.mock.calls[1][1] as unknown[]).length).toBe(1);
+  });
+
+  test('the audit appends a user message telling the model to verify before finalizing', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return noToolFinish('done'); // premature
+      return noToolFinish('ok, confirmed'); // finish after audit
+    });
+
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true }),
+    );
+
+    const audit = state.messages.find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('audit the task'),
+    );
+    expect(audit).toBeDefined();
+  });
+
+  test('a second no-tool answer after the audit does not trigger another audit', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return noToolFinish(calls === 1 ? 'done' : 'still done, no tools needed');
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true, onEvent: (e) => events.push(e) }),
+    );
+
+    // A genuinely-no-tools task still finishes — after exactly one audit turn, never a loop.
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(2);
+    expect(calls).toBe(2);
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(1);
+  });
+
+  test('with completionAudit off, a premature finish returns immediately (no audit)', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return noToolFinish('done');
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: false, onEvent: (e) => events.push(e) }),
+    );
+
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(1);
+    expect(calls).toBe(1);
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(0);
+  });
+
+  test('a tiny maxTurns cannot create an over-budget audit call', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return noToolFinish('done'); // always tries to finish with no tools
+    });
+
+    const events: Record<string, unknown>[] = [];
+    // maxTurns 2: the premature finish lands on turn index 1, leaving no room for a real
+    // tool-enabled audit turn, so the audit must NOT fire and no extra call is made.
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true, maxTurns: 2, onEvent: (e) => events.push(e) }),
+    );
+
+    expect(state.stopReason).toBe('done');
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(0);
+    // Never more model calls than the turn budget allows.
+    expect(calls).toBeLessThanOrEqual(2);
+    expect(calls).toBe(1);
+  });
+});

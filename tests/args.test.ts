@@ -97,6 +97,18 @@ describe('parseArgs — --max-turns', () => {
   });
 });
 
+describe('parseArgs — --serious', () => {
+  test('--serious sets serious=true', () => {
+    const result = parseArgs(args('--serious', 'big task'));
+    expect(result.serious).toBe(true);
+    expect(result.task).toBe('big task');
+  });
+
+  test('defaults to serious=false when absent', () => {
+    expect(parseArgs(args('task')).serious).toBe(false);
+  });
+});
+
 describe('loadSystemPrompt', () => {
   test('returns file content when the file exists', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ba-lsp-'));
