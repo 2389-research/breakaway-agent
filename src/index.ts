@@ -3,7 +3,7 @@
 
 import { run } from './agent.ts';
 import { tools } from './tools.ts';
-import { defaultPolicy } from './policy.ts';
+import { defaultPolicy, selectPolicy } from './policy.ts';
 import type { Message, FinalState, Policy, Tool } from './types.ts';
 import { openTranscript, writeEvent, closeTranscript, defaultTranscriptDir } from './transcript.ts';
 import { render, buildRenderConfig, formatTransition, type Tier, type RenderConfig } from './render.ts';
@@ -83,6 +83,7 @@ Options:
   --cwd <path>     Change working directory before running tools.
   --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL).
   --system <path>  Path to system prompt file (default: system.txt).
+  --serious        Long-horizon profile: 80 turns and extra API-retry headroom.
   --max-turns <n>  Override the loop turn budget (default: policy's maxTurns).
   --quiet          Minimal output — tool calls and stats only.
   --debug          Full output — reasoning, api_ms, longer excerpts.
@@ -96,6 +97,7 @@ export type ParsedArgs = {
   model: string | null;
   cwd: string | null;
   maxTurns: number | null;
+  serious: boolean;
   help: boolean;
   unknownFlag: string | null;
 };
@@ -107,6 +109,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let model: string | null = null;
   let cwd: string | null = null;
   let maxTurns: number | null = null;
+  let serious = false;
   let help = false;
   let unknownFlag: string | null = null;
 
@@ -124,6 +127,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       } else {
         tier = 'debug';
       }
+    } else if (args[i] === '--serious') {
+      serious = true;
     } else if (args[i] === '--help') {
       help = true;
     } else if (args[i] === '--system' && args[i + 1]) {
@@ -146,7 +151,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { task, systemPath, tier, model, cwd, maxTurns, help, unknownFlag };
+  return { task, systemPath, tier, model, cwd, maxTurns, serious, help, unknownFlag };
 }
 
 export function loadSystemPrompt(path: string, isDefault: boolean): string {
@@ -434,7 +439,7 @@ async function repl(systemPrompt: string, systemPath: string, model: string | nu
 }
 
 async function main(): Promise<void> {
-  const { task, systemPath, tier, model, cwd, maxTurns, help, unknownFlag } = parseArgs(process.argv);
+  const { task, systemPath, tier, model, cwd, maxTurns, serious, help, unknownFlag } = parseArgs(process.argv);
 
   if (unknownFlag) {
     process.stderr.write(`error: unknown flag: ${unknownFlag}\n\n${USAGE}\n`);
@@ -458,7 +463,7 @@ async function main(): Promise<void> {
   const isDefaultSystem = systemPath === DEFAULT_SYSTEM_PATH;
   const systemPrompt = loadSystemPrompt(systemPath, isDefaultSystem);
   currentRefs.systemPrompt = systemPrompt;
-  const policy = maxTurns !== null ? { ...defaultPolicy, maxTurns } : defaultPolicy;
+  const policy = selectPolicy({ serious, maxTurns });
   currentRefs.policy = policy;
 
   // Update the SIGHUP handler's systemPath now that we know it.
