@@ -3,3 +3,4 @@
 node_modules/
 .transcripts/
 /break-away
+.kata.local.toml
