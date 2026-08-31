@@ -3,7 +3,7 @@
 
 import { chat } from './client.ts';
 import { redactSecrets } from './redact.ts';
-import type { Message, Tool, Policy, FinalState, ToolCall } from './types.ts';
+import type { Message, Tool, Policy, FinalState, ToolCall, ToolDefinition } from './types.ts';
 
 function emitEvent(policy: Policy, event: Record<string, unknown>): void {
   if (!policy.onEvent) return;
@@ -11,6 +11,54 @@ function emitEvent(policy: Policy, event: Record<string, unknown>): void {
     policy.onEvent(event);
   } catch {
     // best-effort — observer errors must not kill the loop
+  }
+}
+
+// A transient error is worth retrying; a permanent one (bad key, bad request) is not.
+// Classification mirrors the OpenAI SDK's own shouldRetry: connection errors (no numeric
+// status) plus 408/409/429 and any 5xx. Everything else (401, 400, 404, ...) is permanent.
+function isTransientApiError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  if (typeof status !== 'number') return true; // connection/network failure — no HTTP status
+  if (status === 408 || status === 409 || status === 429) return true;
+  return status >= 500;
+}
+
+// A safe, payload-free reason for the api_retry event — status only, never the error body,
+// so provider payloads and any embedded key material never reach the transcript.
+function apiErrorReason(err: unknown): string {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? `HTTP ${status}` : 'connection error';
+}
+
+// Call the model with bounded retries for transient failures. Retries happen here, below the
+// turn loop, so a blip costs backoff time but never a turn. Permanent errors rethrow immediately.
+async function callChatWithRetry(
+  messages: Message[],
+  toolDefs: ToolDefinition[],
+  modelOverride: string | null | undefined,
+  policy: Policy,
+): Promise<Awaited<ReturnType<typeof chat>>> {
+  const maxAttempts = Math.max(1, policy.apiMaxAttempts ?? 1);
+  const baseMs = policy.apiRetryBaseMs ?? 750;
+  let attempt = 0;
+  for (;;) {
+    attempt++;
+    try {
+      return await chat(messages, toolDefs, modelOverride);
+    } catch (err) {
+      if (!isTransientApiError(err) || attempt >= maxAttempts) throw err;
+      // Exponential backoff with jitter (0.5×–1.5× the base window) to avoid thundering-herd retries.
+      const delay = Math.round(baseMs * 2 ** (attempt - 1) * (0.5 + Math.random()));
+      emitEvent(policy, {
+        event: 'api_retry',
+        attempt,
+        max_attempts: maxAttempts,
+        delay_ms: delay,
+        reason: apiErrorReason(err),
+      });
+      await Bun.sleep(delay);
+    }
   }
 }
 
@@ -82,7 +130,7 @@ export async function run(
     let response: Awaited<ReturnType<typeof chat>>;
     const apiStart = Date.now();
     try {
-      response = await chat(contextMessages, activeToolDefs, modelOverride);
+      response = await callChatWithRetry(contextMessages, activeToolDefs, modelOverride, policy);
     } catch (err) {
       allMessages.push({ role: 'assistant', content: `error: ${String(err)}` });
       return {

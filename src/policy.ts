@@ -8,4 +8,7 @@ export const defaultPolicy: Policy = {
   onToolError: 'retry',
   contextStrategy: (messages: Message[]) => messages,
   shouldContinue: (msg: Message) => msg.role === 'assistant' && !!msg.tool_calls?.length,
+  // Survival by default: retry transient gateway blips so a run finishes instead of dying at turn N.
+  apiMaxAttempts: 3,
+  apiRetryBaseMs: 750,
 };

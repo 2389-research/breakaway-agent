@@ -389,3 +389,117 @@ describe('agent run — onEvent observer', () => {
     expect(state.stopReason).toBe('done');
   });
 });
+
+describe('agent run — API retry (survive transient errors)', () => {
+  test('retries a transient API error and completes instead of dying', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        // Mirror a real OpenAI APIError: a numeric .status rides on the thrown error.
+        throw Object.assign(new Error('bad gateway sk-should-not-leak'), { status: 503 });
+      }
+      return {
+        message: { role: 'assistant' as const, content: 'recovered' },
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        finish_reason: 'stop',
+      };
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1, onEvent: (e) => events.push(e) }),
+    );
+
+    // A single blip must not kill the run — this is the whole point of the fix.
+    expect(state.stopReason).toBe('done');
+    expect(calls).toBe(2);
+    // A retried API call is NOT a turn: the model only produced one real response.
+    expect(state.turns).toBe(1);
+
+    // The retry is observable to the TUI...
+    const retry = events.find((e) => e.event === 'api_retry');
+    expect(retry).toBeDefined();
+    expect(retry?.attempt).toBe(1);
+    expect(retry?.max_attempts).toBe(3);
+    // ...but the event must not leak the error payload — status only, no keys, no message body.
+    const reason = String(retry?.reason);
+    expect(reason).toContain('503');
+    expect(reason).not.toContain('sk-');
+  });
+
+  test('gives up after apiMaxAttempts transient failures and returns error', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      throw Object.assign(new Error('server exploded'), { status: 500 });
+    });
+
+    const state = await run(
+      initialMessages(),
+      [],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1 }),
+    );
+
+    expect(state.stopReason).toBe('error');
+    // Exactly apiMaxAttempts total tries — bounded, never infinite.
+    expect(calls).toBe(3);
+  });
+
+  test('does not retry a permanent client error', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      throw Object.assign(new Error('unauthorized'), { status: 401 });
+    });
+
+    const state = await run(
+      initialMessages(),
+      [],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1 }),
+    );
+
+    expect(state.stopReason).toBe('error');
+    // 401 is a permanent client error — one attempt, no wasted retries.
+    expect(calls).toBe(1);
+  });
+
+  test('a transient blip mid-run does not inflate the turn count', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        return {
+          message: {
+            role: 'assistant' as const,
+            content: '',
+            tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'my_tool', arguments: '{}' } }],
+          },
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+          finish_reason: 'tool_calls',
+        };
+      }
+      if (calls === 2) {
+        throw Object.assign(new Error('rate limited'), { status: 429 });
+      }
+      return {
+        message: { role: 'assistant' as const, content: 'done after blip' },
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        finish_reason: 'stop',
+      };
+    });
+
+    const state = await run(
+      initialMessages(),
+      [makeTool('my_tool')],
+      makePolicy({ apiMaxAttempts: 3, apiRetryBaseMs: 1 }),
+    );
+
+    expect(state.stopReason).toBe('done');
+    // Two real model responses = two turns; the 429 blip between them is not a turn.
+    expect(state.turns).toBe(2);
+    expect(calls).toBe(3);
+  });
+});

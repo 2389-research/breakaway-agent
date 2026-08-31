@@ -38,6 +38,10 @@ export type Policy = {
   contextStrategy: (messages: Message[]) => Message[];
   shouldContinue: (lastMessage: Message) => boolean;
   onEvent?: (event: Record<string, unknown>) => void;
+  // Transient API errors (connection drops, 429, 5xx) get retried in-loop so a single
+  // gateway blip doesn't kill a long investigation. A retry does NOT consume a turn.
+  apiMaxAttempts?: number; // total tries per model call, including the first (default 3)
+  apiRetryBaseMs?: number; // base backoff; grows exponentially with jitter (default 750)
 };
 
 export type FinalState = {
