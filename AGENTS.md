@@ -30,6 +30,10 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
   retry costs backoff, not a turn), `maxEmptyRetries` (nudges on a blank finish
   before the run ends as `error`), `completionAudit` (one enforced verify pass
   before a finish counts as done; on by default).
+  `strategyCheckpointEvery` (inject a re-focus prompt every N turns, default 40) drives
+  the default `contextStrategy` = `compactByCheckpoints`, which collapses raw exploration
+  before the last completed checkpoint while keeping every checkpoint summary (the view
+  only — `allMessages` and the transcript keep every turn).
 - `system.txt` — prompt is data; swap with `--system <path>`.
 - `src/transcript.ts` — every run appends JSONL to `.transcripts/` (anchored to
   the source dir, never the `--cwd` target).

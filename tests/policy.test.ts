@@ -2,7 +2,8 @@
 // ABOUTME: No I/O; pure assertions against the exported policy object.
 
 import { describe, test, expect } from 'bun:test';
-import { defaultPolicy, seriousPolicy, selectPolicy } from '../src/policy.ts';
+import { defaultPolicy, seriousPolicy, selectPolicy, compactByCheckpoints } from '../src/policy.ts';
+import { STRATEGY_CHECKPOINT_MARKER } from '../src/agent.ts';
 import type { Message } from '../src/types.ts';
 
 describe('defaultPolicy', () => {
@@ -121,5 +122,59 @@ describe('selectPolicy — CLI intent to policy', () => {
     const p = selectPolicy({ serious: true, maxTurns: 120 });
     expect(p.maxTurns).toBe(120); // explicit number wins
     expect(p.apiMaxAttempts).toBe(5); // ...but serious survival stays
+  });
+});
+
+describe('compactByCheckpoints — rolling evidence compaction', () => {
+  const sys: Message = { role: 'system', content: 'sys' };
+  const task: Message = { role: 'user', content: 'the original task' };
+  const cp = (n: number): Message => ({ role: 'user', content: `${STRATEGY_CHECKPOINT_MARKER}\nturn ${n}` });
+  const summary = (s: string): Message => ({ role: 'assistant', content: s });
+  const toolCall: Message = {
+    role: 'assistant',
+    content: '',
+    tool_calls: [{ id: 'tc', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+  };
+  const toolResult: Message = { role: 'tool', content: 'ran', tool_call_id: 'tc', name: 'bash' };
+
+  test('no checkpoint → identity (same array reference)', () => {
+    const msgs = [sys, task, toolCall, toolResult];
+    expect(compactByCheckpoints(msgs)).toBe(msgs);
+  });
+
+  test('a lone pending checkpoint (no summary yet) → identity, so its raw context survives', () => {
+    const msgs = [sys, task, toolCall, toolResult, cp(2)];
+    expect(compactByCheckpoints(msgs)).toBe(msgs);
+  });
+
+  test('one completed checkpoint → drops raw pre-checkpoint turns, keeps system+task+tail', () => {
+    const working: Message = { role: 'assistant', content: 'still working' };
+    const msgs = [sys, task, toolCall, toolResult, cp(2), summary('S2'), working];
+    const view = compactByCheckpoints(msgs);
+    expect(view).toEqual([sys, task, cp(2), summary('S2'), working]);
+    expect(view).not.toContain(toolResult); // the raw pre-checkpoint tool pair is gone from the view
+  });
+
+  test('completed checkpoint followed by a fresh pending one → keeps everything from the completed one on', () => {
+    const work: Message = { role: 'assistant', content: 'work' };
+    const msgs = [sys, task, toolCall, toolResult, cp(2), summary('S2'), work, cp(4)];
+    const view = compactByCheckpoints(msgs);
+    expect(view).toEqual([sys, task, cp(2), summary('S2'), work, cp(4)]);
+  });
+
+  test('multiple completed checkpoints → keeps every summary (the evidence trail)', () => {
+    const more: Message = { role: 'assistant', content: 'more' };
+    const msgs = [sys, task, cp(2), summary('S2'), toolCall, toolResult, cp(4), summary('S4'), more];
+    const view = compactByCheckpoints(msgs);
+    expect(view).toEqual([sys, task, summary('S2'), cp(4), summary('S4'), more]);
+  });
+
+  test('a kept region never orphans a tool result from its call', () => {
+    const msgs = [sys, task, cp(2), summary('S2'), toolCall, toolResult];
+    const view = compactByCheckpoints(msgs);
+    const idxCall = view.indexOf(toolCall);
+    const idxResult = view.indexOf(toolResult);
+    expect(idxCall).toBeGreaterThanOrEqual(0);
+    expect(idxResult).toBe(idxCall + 1);
   });
 });

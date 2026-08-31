@@ -19,6 +19,25 @@ const EMPTY_RESPONSE_NUDGE =
   'Your last response was empty — no tool call and no answer. ' +
   'Either use a tool to keep working, or write your final answer now.';
 
+// A fixed, unique sentinel line that marks a strategy-checkpoint prompt. Detection keys off
+// content.includes(STRATEGY_CHECKPOINT_MARKER) (never equality), so the interpolated turn number
+// in the prompt body never breaks detection. The compactor (policy.ts) uses this to find checkpoints.
+export const STRATEGY_CHECKPOINT_MARKER = '=== STRATEGY CHECKPOINT ===';
+
+// The checkpoint prompt: a mid-run reflection that re-focuses the model and gives the compactor a
+// boundary. The turn number is for the model's benefit only; detection ignores it.
+function strategyCheckpointPrompt(turn: number): string {
+  return (
+    `${STRATEGY_CHECKPOINT_MARKER}\n` +
+    `You are ${turn} turns into this task. Pause and re-focus:\n` +
+    `1. Restate the goal in one line.\n` +
+    `2. Rank your evidence so far, strongest to weakest.\n` +
+    `3. Name the dead leads you are dropping.\n` +
+    `4. State the single strongest lead you will pursue next.\n` +
+    `Answer in prose only — do not call a tool this turn.`
+  );
+}
+
 function emitEvent(policy: Policy, event: Record<string, unknown>): void {
   if (!policy.onEvent) return;
   try {
@@ -139,6 +158,17 @@ export async function run(
   let emptyResponses = 0;
 
   while (turns < policy.maxTurns) {
+    // Strategy checkpoint: every strategyCheckpointEvery turns, inject a reflection prompt at the
+    // top of the loop (before contextStrategy) so the run re-focuses and the compactor gets an
+    // anchor. Fires only mid-run (turns > 0), so a short task never pays for it.
+    let injectedCheckpoint = false;
+    const checkpointEvery = policy.strategyCheckpointEvery ?? 0;
+    if (checkpointEvery > 0 && turns > 0 && turns % checkpointEvery === 0) {
+      emitEvent(policy, { event: 'strategy_checkpoint', turn: turns });
+      allMessages.push({ role: 'user', content: strategyCheckpointPrompt(turns) });
+      injectedCheckpoint = true;
+    }
+
     const contextMessages = policy.contextStrategy(allMessages);
 
     let response: Awaited<ReturnType<typeof chat>>;
@@ -220,6 +250,14 @@ export async function run(
         }
       }
 
+      continue;
+    }
+
+    // A checkpoint answer is reflection, not a completion: the model's no-tool summary would
+    // otherwise read as 'done' and end the run right after every checkpoint. Skip the finish
+    // classifier for it and keep working. (A checkpoint answered with a tool call already took the
+    // tool branch above.) A BLOCKED: answer here is likewise deferred one turn — the model re-blocks.
+    if (injectedCheckpoint) {
       continue;
     }
 

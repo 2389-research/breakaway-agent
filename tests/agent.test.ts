@@ -15,7 +15,7 @@ const mockChat = mock(async () => ({
 mock.module('../src/client.ts', () => ({ chat: mockChat }));
 
 // Import agent AFTER mocking
-const { run } = await import('../src/agent.ts');
+const { run, STRATEGY_CHECKPOINT_MARKER } = await import('../src/agent.ts');
 
 // A no-op tool for testing
 function makeTool(name: string, handler: (args: Record<string, unknown>) => Promise<string> = async () => 'ok'): Tool {
@@ -669,6 +669,56 @@ describe('agent run — blocked finish', () => {
     expect(state.stopReason).toBe('blocked');
     expect(state.turns).toBe(1);
     expect(mockChat).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('agent run — strategy checkpoint', () => {
+  test('injects a checkpoint every strategyCheckpointEvery turns and does not finish on the answer', async () => {
+    const toolResp = {
+      message: {
+        role: 'assistant' as const,
+        content: '',
+        tool_calls: [{ id: 'tc', type: 'function' as const, function: { name: 'my_tool', arguments: '{}' } }],
+      },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      finish_reason: 'tool_calls' as const,
+    };
+    // Turns 1-2: tool-calling work (so the run doesn't finish before the checkpoint fires at turn 2).
+    // Turn 3 = the checkpoint answer (prose, skipped as a finish). Turn 4 = the real finish.
+    mockChat
+      .mockResolvedValueOnce(toolResp)
+      .mockResolvedValueOnce(toolResp)
+      .mockResolvedValueOnce({
+        message: { role: 'assistant', content: 'Goal: X. Evidence ranked. Next: Y.' },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        finish_reason: 'stop',
+      })
+      .mockResolvedValueOnce({
+        message: { role: 'assistant', content: 'final answer' },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        finish_reason: 'stop',
+      });
+
+    const events: Record<string, unknown>[] = [];
+    const policy = makePolicy({
+      strategyCheckpointEvery: 2,
+      onEvent: (e) => events.push(e),
+      contextStrategy: (m) => m, // isolate injection from compaction in this test
+    });
+    const state = await run(initialMessages(), [makeTool('my_tool')], policy);
+
+    // The checkpoint answer (turn 3) did NOT end the run; the real finish (turn 4) did.
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(4);
+
+    const cpEvents = events.filter((e) => e.event === 'strategy_checkpoint');
+    expect(cpEvents.length).toBe(1);
+    expect(cpEvents[0].turn).toBe(2);
+
+    const injected = state.messages.find(
+      (m) => m.role === 'user' && String(m.content).includes(STRATEGY_CHECKPOINT_MARKER),
+    );
+    expect(injected).toBeDefined();
   });
 });
 

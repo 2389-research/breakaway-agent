@@ -177,6 +177,13 @@ export function render(event: Record<string, unknown>, config: RenderConfig, wri
       return;
     }
 
+    case 'strategy_checkpoint': {
+      if (config.tier === 'quiet') return;
+      const turn = event.turn as number;
+      writer(`${CYAN(config)}${BOLD(config)}◆ strategy checkpoint (turn ${turn})${RESET(config)}\n`);
+      return;
+    }
+
     default:
       // Unknown event type — silently ignore.
       return;

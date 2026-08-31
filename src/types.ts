@@ -51,6 +51,9 @@ export type Policy = {
   // When true, a model's first no-tool finish triggers exactly one audit turn (tools re-enabled)
   // to catch false victory before the run is accepted as done. Off by default; on in --serious.
   completionAudit?: boolean;
+  // Every N turns, inject a strategy-checkpoint prompt so a long run re-focuses and its evidence
+  // trail gets a compaction anchor. 0 or undefined disables it. Default 40.
+  strategyCheckpointEvery?: number;
 };
 
 export type FinalState = {

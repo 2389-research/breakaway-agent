@@ -172,6 +172,21 @@ describe('render — nudge', () => {
   });
 });
 
+// ── strategy_checkpoint ───────────────────────────────────────────────────────
+
+describe('render — strategy_checkpoint', () => {
+  test('rich: shows the checkpoint turn', () => {
+    const out = collect({ event: 'strategy_checkpoint', turn: 40 }, RICH);
+    expect(out).toContain('strategy checkpoint');
+    expect(out).toContain('40');
+  });
+
+  test('quiet: omits the checkpoint line', () => {
+    const out = collect({ event: 'strategy_checkpoint', turn: 40 }, QUIET);
+    expect(out).toBe('');
+  });
+});
+
 // ── unknown events ────────────────────────────────────────────────────────────
 
 describe('render — unknown events', () => {
