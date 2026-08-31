@@ -9,22 +9,25 @@ export const defaultPolicy: Policy = {
   maxTurns: Infinity,
   onToolError: 'retry',
   contextStrategy: (messages: Message[]) => messages,
-  shouldContinue: (msg: Message) => msg.role === 'assistant' && !!msg.tool_calls?.length,
+  // A finish must be a real answer: assistant role, no pending tool calls, non-empty content.
+  // A blank no-tool response fails this gate, so it can never be mistaken for a completed run.
+  isComplete: (msg: Message) =>
+    msg.role === 'assistant' && !msg.tool_calls?.length && (msg.content ?? '').trim() !== '',
   // Survival by default: retry transient gateway blips so a run finishes instead of dying at turn N.
   apiMaxAttempts: 3,
   apiRetryBaseMs: 750,
-  // Off by default so existing experiments are unchanged; --serious turns it on.
-  completionAudit: false,
+  // A blank finish gets this many nudges to recover before the run ends as 'error' (never a false done).
+  maxEmptyRetries: 1,
+  // On by default: never accept the model's first "looks done" without one enforced verify pass.
+  completionAudit: true,
 };
 
-// The "I mean business" profile (--serious): extra blip-survival plus a completion audit for
-// big tasks. Like the default it runs unbounded (maxTurns inherited as Infinity) — the horizon
-// is now the model's own judgment, not a turn count.
+// The "I mean business" profile (--serious): extra blip-survival on top of the default. The
+// completion audit is already baseline (on in defaultPolicy), so serious only needs to add more
+// API-retry headroom. Like the default it runs unbounded (maxTurns inherited as Infinity).
 export const seriousPolicy: Policy = {
   ...defaultPolicy,
   apiMaxAttempts: 5,
-  // A serious run should not accept the model's first "looks done" at face value — audit it.
-  completionAudit: true,
 };
 
 // Resolve CLI intent into a Policy. --serious picks the survival profile; an explicit --max-turns

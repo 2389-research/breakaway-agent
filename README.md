@@ -67,7 +67,7 @@ The model drives five tools:
 
 **Swap context strategy:** replace `contextStrategy` in `src/policy.ts` with a function that filters or trims the message array. A sliding-window example lives in `e2e/seam-proof.ts`.
 
-**The loop itself** is the `run()` function in `src/agent.ts` (~150 lines; the file is ~250 with the retry and tool-dispatch helpers). All behavior is injected through `Policy` — the loop is policy-blind.
+**The loop itself** is the `run()` function in `src/agent.ts` (~165 lines; the file is ~280 with the retry and tool-dispatch helpers). All behavior is injected through `Policy` — the loop is policy-blind.
 
 ## Self-modification
 

@@ -33,7 +33,9 @@ function makeTool(name: string, handler: (args: Record<string, unknown>) => Prom
 }
 
 function makePolicy(overrides: Partial<Policy> = {}): Policy {
-  return { ...defaultPolicy, ...overrides };
+  // Most loop tests isolate behavior from the completion audit (on in the real default policy);
+  // the audit has its own describe block that opts in explicitly with completionAudit: true.
+  return { ...defaultPolicy, completionAudit: false, ...overrides };
 }
 
 function initialMessages(task = 'do something'): Message[] {
@@ -651,5 +653,81 @@ describe('agent run — completion audit (catch false victory)', () => {
     // Never more model calls than the turn budget allows.
     expect(calls).toBeLessThanOrEqual(2);
     expect(calls).toBe(1);
+  });
+});
+
+describe('agent run — honest completion (a blank finish is not success)', () => {
+  const emptyFinish = () => ({
+    message: { role: 'assistant' as const, content: '' },
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    finish_reason: 'stop' as const,
+  });
+  const realFinish = (content: string) => ({
+    message: { role: 'assistant' as const, content },
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    finish_reason: 'stop' as const,
+  });
+  const toolCall = (name: string) => ({
+    message: {
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id: 'tc1', type: 'function' as const, function: { name, arguments: '{}' } }],
+    },
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    finish_reason: 'tool_calls' as const,
+  });
+
+  test('a blank finish is rejected — the loop nudges the model instead of reporting a false done', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return calls === 1 ? emptyFinish() : realFinish('here is the real answer');
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(initialMessages(), [], makePolicy({ onEvent: (e) => events.push(e) }));
+
+    // The empty turn did not end the run as done; the model got one nudge and recovered.
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(2);
+    // The final message is the real answer, not the blank one.
+    expect(state.messages[state.messages.length - 1].content).toBe('here is the real answer');
+    // A nudge was injected, and the empty response was flagged for observers.
+    const nudge = state.messages.find((m) => m.role === 'user' && /empty/i.test(m.content));
+    expect(nudge).toBeDefined();
+    expect(events.filter((e) => e.event === 'empty_response')).toHaveLength(1);
+  });
+
+  test('a persistently blank finish ends the run as error, never a false done', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return emptyFinish();
+    });
+
+    const state = await run(initialMessages(), [], makePolicy());
+
+    // One retry (maxEmptyRetries: 1), then an honest failure — not a silent 'done'.
+    expect(state.stopReason).toBe('error');
+    expect(state.turns).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  test('a blank streak is consecutive — a productive turn between blanks resets the count', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return emptyFinish();       // blank #1 → nudge
+      if (calls === 2) return toolCall('my_tool');  // productive turn → resets the streak
+      if (calls === 3) return emptyFinish();        // blank #1 again (not #2) → nudge, not error
+      return realFinish('finished for real');        // genuine finish → done
+    });
+
+    const state = await run(initialMessages(), [makeTool('my_tool')], makePolicy());
+
+    // Without the reset, call 3 would be the 2nd consecutive blank and the run would error.
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(4);
+    expect(calls).toBe(4);
   });
 });

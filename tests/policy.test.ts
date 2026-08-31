@@ -34,32 +34,41 @@ describe('defaultPolicy', () => {
     expect(result[0].role).toBe('system');
   });
 
-  test('shouldContinue returns true for assistant message with tool_calls', () => {
+  test('isComplete accepts a real finish — assistant, content, no tool calls', () => {
+    const msg: Message = { role: 'assistant', content: 'here is the answer' };
+    expect(defaultPolicy.isComplete(msg)).toBe(true);
+  });
+
+  test('isComplete rejects a blank finish — empty content is not an answer', () => {
+    const msg: Message = { role: 'assistant', content: '   ' };
+    expect(defaultPolicy.isComplete(msg)).toBe(false);
+  });
+
+  test('isComplete rejects a message that still has tool calls — the model is not done', () => {
     const msg: Message = {
       role: 'assistant',
       content: '',
       tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
     };
-    expect(defaultPolicy.shouldContinue(msg)).toBe(true);
+    expect(defaultPolicy.isComplete(msg)).toBe(false);
   });
 
-  test('shouldContinue returns false for assistant message without tool_calls', () => {
-    const msg: Message = { role: 'assistant', content: 'done' };
-    expect(defaultPolicy.shouldContinue(msg)).toBe(false);
-  });
-
-  test('shouldContinue returns false for user message', () => {
+  test('isComplete rejects a non-assistant message', () => {
     const msg: Message = { role: 'user', content: 'hi' };
-    expect(defaultPolicy.shouldContinue(msg)).toBe(false);
+    expect(defaultPolicy.isComplete(msg)).toBe(false);
   });
 
-  test('shouldContinue returns false for empty tool_calls array', () => {
+  test('isComplete treats an empty tool_calls array as a real finish when content is present', () => {
     const msg: Message = { role: 'assistant', content: 'done', tool_calls: [] };
-    expect(defaultPolicy.shouldContinue(msg)).toBe(false);
+    expect(defaultPolicy.isComplete(msg)).toBe(true);
   });
 
-  test('completionAudit is off — the default profile stays compatible with existing runs', () => {
-    expect(defaultPolicy.completionAudit).toBe(false);
+  test('maxEmptyRetries is 1 — one nudge on a blank finish, then the run errors', () => {
+    expect(defaultPolicy.maxEmptyRetries).toBe(1);
+  });
+
+  test('completionAudit is on by default — every run audits its finish before accepting done', () => {
+    expect(defaultPolicy.completionAudit).toBe(true);
   });
 });
 
@@ -75,12 +84,11 @@ describe('seriousPolicy — the long-horizon profile', () => {
 
   test('completionAudit is on — a serious run audits its own completion before finishing', () => {
     expect(seriousPolicy.completionAudit).toBe(true);
-    expect(defaultPolicy.completionAudit).toBe(false);
   });
 
   test('inherits the rest of the default policy', () => {
     expect(seriousPolicy.onToolError).toBe(defaultPolicy.onToolError);
-    expect(seriousPolicy.shouldContinue).toBe(defaultPolicy.shouldContinue);
+    expect(seriousPolicy.isComplete).toBe(defaultPolicy.isComplete);
   });
 });
 

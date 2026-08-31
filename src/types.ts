@@ -36,12 +36,17 @@ export type Policy = {
   maxTurns: number;
   onToolError: 'retry' | 'abort' | 'nudge';
   contextStrategy: (messages: Message[]) => Message[];
-  shouldContinue: (lastMessage: Message) => boolean;
+  // Accept this no-tool message as a finished run? Default: assistant role, no tool calls, and
+  // non-empty content. A blank finish fails the gate, so "no tool calls" alone never means done.
+  isComplete: (lastMessage: Message) => boolean;
   onEvent?: (event: Record<string, unknown>) => void;
   // Transient API errors (connection drops, 429, 5xx) get retried in-loop so a single
   // gateway blip doesn't kill a long investigation. A retry does NOT consume a turn.
   apiMaxAttempts?: number; // total tries per model call, including the first (default 3)
   apiRetryBaseMs?: number; // base backoff; grows exponentially with jitter (default 750)
+  // A blank finish (no tool calls, empty content) is not a real answer. The loop nudges the model
+  // this many times to recover before ending with stopReason 'error' instead of a false 'done' (default 1).
+  maxEmptyRetries?: number;
   // When true, a model's first no-tool finish triggers exactly one audit turn (tools re-enabled)
   // to catch false victory before the run is accepted as done. Off by default; on in --serious.
   completionAudit?: boolean;

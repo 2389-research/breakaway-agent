@@ -27,7 +27,9 @@ function makeTool(name: string, handler: (args: Record<string, unknown>) => Prom
 }
 
 function makePolicy(overrides: Partial<Policy> = {}): Policy {
-  return { ...defaultPolicy, ...overrides };
+  // These event-shape tests script an exact number of responses; isolate them from the completion
+  // audit (on in the real default policy) so it doesn't request an extra, unscripted turn.
+  return { ...defaultPolicy, completionAudit: false, ...overrides };
 }
 
 function initialMessages(): Message[] {

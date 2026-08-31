@@ -10,7 +10,7 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
 
 - `bun src/index.ts "task"` — one-shot. `bun src/index.ts` — REPL.
 - Flags: `--cwd`, `--model`, `--system`, `--serious`, `--max-turns`, `--quiet`, `--debug`, `--help`.
-- `--serious`: long-horizon profile (`seriousPolicy` in policy.ts) — `apiMaxAttempts: 5`, `completionAudit: true`, no turn limit (like the default). `--max-turns N` imposes an explicit safety/debug cap on top; hitting it exits nonzero.
+- `--serious`: long-horizon profile (`seriousPolicy` in policy.ts) — `apiMaxAttempts: 5` on top of the default (the completion audit is now baseline, on for every run), no turn limit (like the default). `--max-turns N` imposes an explicit safety/debug cap on top; hitting it exits nonzero.
 - Output tiers: `--quiet` (tool calls + stats), default `rich` (reasoning + interim prose + tool snippets), `--debug` (rich + api_ms + longer excerpts). `--quiet` and `--debug` are mutually exclusive.
 - **Pure YOLO by design**: no permission prompts, no sandbox, no confirmation
   gates. The agent executes whatever the model asks. This is intentional
@@ -23,10 +23,12 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
   Current set: `read_file` (whole-file or ranged by `start_line`/`max_lines`),
   `write_file`, `edit_file` (exact-match atomic replace), `bash`, `spawn_agent`.
 - `src/policy.ts` — the experiment surface: `maxTurns`, `onToolError`,
-  `contextStrategy`, `shouldContinue`, `onEvent` (transcript observer),
-  `apiMaxAttempts`/`apiRetryBaseMs` (in-loop transient-error retry; a retry
-  costs backoff, not a turn), `completionAudit` (one enforced verify pass
-  before a no-tool finish counts as done).
+  `contextStrategy`, `isComplete` (is this no-tool message a real finish? default:
+  non-empty content — a blank answer never counts as done), `onEvent` (transcript
+  observer), `apiMaxAttempts`/`apiRetryBaseMs` (in-loop transient-error retry; a
+  retry costs backoff, not a turn), `maxEmptyRetries` (nudges on a blank finish
+  before the run ends as `error`), `completionAudit` (one enforced verify pass
+  before a finish counts as done; on by default).
 - `system.txt` — prompt is data; swap with `--system <path>`.
 - `src/transcript.ts` — every run appends JSONL to `.transcripts/` (anchored to
   the source dir, never the `--cwd` target).

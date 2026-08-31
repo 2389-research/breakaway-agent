@@ -13,6 +13,12 @@ const COMPLETION_AUDIT_PROMPT =
   'Check the final diff/state and relevant tests. If the result is already proven, ' +
   'finish with the concise evidence.';
 
+// Injected when the model tries to finish with a blank response — no tool call and no answer.
+// "No tool calls" alone is not success; this nudges the model to act or actually answer.
+const EMPTY_RESPONSE_NUDGE =
+  'Your last response was empty — no tool call and no answer. ' +
+  'Either use a tool to keep working, or write your final answer now.';
+
 function emitEvent(policy: Policy, event: Record<string, unknown>): void {
   if (!policy.onEvent) return;
   try {
@@ -128,6 +134,9 @@ export async function run(
   let turns = 0;
   // Completion audit fires at most once per run() — this guards against re-triggering.
   let completionAuditTriggered = false;
+  // Consecutive blank finishes (no tool calls, empty content). Reset by any productive turn or a
+  // real completion; when it exceeds maxEmptyRetries the run ends as 'error', not a false 'done'.
+  let emptyResponses = 0;
 
   while (turns < policy.maxTurns) {
     const contextMessages = policy.contextStrategy(allMessages);
@@ -170,6 +179,8 @@ export async function run(
     });
 
     if (finishReason === 'tool_calls' || response.message.tool_calls?.length) {
+      // A productive (tool-calling) turn clears any prior blank streak.
+      emptyResponses = 0;
       const tcs = response.message.tool_calls ?? [];
 
       for (const tc of tcs) {
@@ -212,8 +223,10 @@ export async function run(
       continue;
     }
 
-    // No tool calls — the model wants to finish.
-    if (!policy.shouldContinue(response.message)) {
+    // No tool calls — the model is trying to finish.
+    if (policy.isComplete(response.message)) {
+      // A real answer clears any prior blank streak.
+      emptyResponses = 0;
       // Completion audit: give the model exactly one enforced chance to verify before we accept
       // a no-tool finish as done. Only fire when at least one more turn of budget remains
       // (turns < maxTurns - 1) so the injected audit turn can actually run; at an explicit
@@ -237,6 +250,23 @@ export async function run(
         stopReason: 'done',
       };
     }
+
+    // Not an acceptable finish: a blank response — no tool calls and empty content. "No tool calls"
+    // alone must never count as success. Nudge the model to act or give a real answer; after
+    // maxEmptyRetries consecutive blanks, end honestly with 'error' instead of a false 'done'.
+    emptyResponses++;
+    if (emptyResponses > (policy.maxEmptyRetries ?? 1)) {
+      return {
+        messages: allMessages,
+        turns,
+        usage,
+        elapsed: Date.now() - start,
+        stopReason: 'error',
+      };
+    }
+    emitEvent(policy, { event: 'empty_response', turn: turns, attempt: emptyResponses });
+    allMessages.push({ role: 'user', content: EMPTY_RESPONSE_NUDGE });
+    continue;
   }
 
   return {
