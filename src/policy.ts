@@ -11,6 +11,8 @@ export const defaultPolicy: Policy = {
   // Survival by default: retry transient gateway blips so a run finishes instead of dying at turn N.
   apiMaxAttempts: 3,
   apiRetryBaseMs: 750,
+  // Off by default so existing experiments are unchanged; --serious turns it on.
+  completionAudit: false,
 };
 
 // The "I mean business" profile (--serious): a long horizon for big tasks plus extra
@@ -19,6 +21,8 @@ export const seriousPolicy: Policy = {
   ...defaultPolicy,
   maxTurns: 80,
   apiMaxAttempts: 5,
+  // A serious run should not accept the model's first "looks done" at face value — audit it.
+  completionAudit: true,
 };
 
 // Resolve CLI intent into a Policy. --serious picks the long-horizon profile; an explicit

@@ -503,3 +503,129 @@ describe('agent run — API retry (survive transient errors)', () => {
     expect(calls).toBe(3);
   });
 });
+
+describe('agent run — completion audit (catch false victory)', () => {
+  const noToolFinish = (content: string) => ({
+    message: { role: 'assistant' as const, content },
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    finish_reason: 'stop' as const,
+  });
+  const toolCall = (name: string) => ({
+    message: {
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id: 'tc1', type: 'function' as const, function: { name, arguments: '{}' } }],
+    },
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    finish_reason: 'tool_calls' as const,
+  });
+
+  test('a premature no-tool finish injects one audit turn, model then verifies with tools, ends done', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return noToolFinish('looks done to me'); // premature victory
+      if (calls === 2) return toolCall('verify'); // audit turn: model actually checks
+      return noToolFinish('verified against the tests, all good'); // genuine finish
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true, onEvent: (e) => events.push(e) }),
+    );
+
+    // The audit turned a premature stop into a verified completion — not maxTurns, not error.
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(3);
+    // Exactly one audit was triggered for the task.
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(1);
+    // The audit turn (call 2) was made WITH tools enabled, so the model could actually verify.
+    expect((mockChat.mock.calls[1][1] as unknown[]).length).toBe(1);
+  });
+
+  test('the audit appends a user message telling the model to verify before finalizing', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return noToolFinish('done'); // premature
+      return noToolFinish('ok, confirmed'); // finish after audit
+    });
+
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true }),
+    );
+
+    const audit = state.messages.find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('audit the task'),
+    );
+    expect(audit).toBeDefined();
+  });
+
+  test('a second no-tool answer after the audit does not trigger another audit', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return noToolFinish(calls === 1 ? 'done' : 'still done, no tools needed');
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true, onEvent: (e) => events.push(e) }),
+    );
+
+    // A genuinely-no-tools task still finishes — after exactly one audit turn, never a loop.
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(2);
+    expect(calls).toBe(2);
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(1);
+  });
+
+  test('with completionAudit off, a premature finish returns immediately (no audit)', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return noToolFinish('done');
+    });
+
+    const events: Record<string, unknown>[] = [];
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: false, onEvent: (e) => events.push(e) }),
+    );
+
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(1);
+    expect(calls).toBe(1);
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(0);
+  });
+
+  test('a tiny maxTurns cannot create an over-budget audit call', async () => {
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      return noToolFinish('done'); // always tries to finish with no tools
+    });
+
+    const events: Record<string, unknown>[] = [];
+    // maxTurns 2: the premature finish lands on turn index 1, leaving no room for a real
+    // tool-enabled audit turn, so the audit must NOT fire and no extra call is made.
+    const state = await run(
+      initialMessages(),
+      [makeTool('verify')],
+      makePolicy({ completionAudit: true, maxTurns: 2, onEvent: (e) => events.push(e) }),
+    );
+
+    expect(state.stopReason).toBe('done');
+    expect(events.filter((e) => e.event === 'completion_audit')).toHaveLength(0);
+    // Never more model calls than the turn budget allows.
+    expect(calls).toBeLessThanOrEqual(2);
+    expect(calls).toBe(1);
+  });
+});

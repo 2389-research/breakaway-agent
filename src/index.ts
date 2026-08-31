@@ -83,7 +83,8 @@ Options:
   --cwd <path>     Change working directory before running tools.
   --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL).
   --system <path>  Path to system prompt file (default: system.txt).
-  --serious        Long-horizon profile: 80 turns and extra API-retry headroom.
+  --serious        Long-horizon profile: 80 turns, extra API-retry headroom, and a
+                   completion audit that verifies before accepting a finish.
   --max-turns <n>  Override the loop turn budget (default: policy's maxTurns).
   --quiet          Minimal output — tool calls and stats only.
   --debug          Full output — reasoning, api_ms, longer excerpts.

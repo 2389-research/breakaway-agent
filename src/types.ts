@@ -42,6 +42,9 @@ export type Policy = {
   // gateway blip doesn't kill a long investigation. A retry does NOT consume a turn.
   apiMaxAttempts?: number; // total tries per model call, including the first (default 3)
   apiRetryBaseMs?: number; // base backoff; grows exponentially with jitter (default 750)
+  // When true, a model's first no-tool finish triggers exactly one audit turn (tools re-enabled)
+  // to catch false victory before the run is accepted as done. Off by default; on in --serious.
+  completionAudit?: boolean;
 };
 
 export type FinalState = {

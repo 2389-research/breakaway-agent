@@ -57,6 +57,10 @@ describe('defaultPolicy', () => {
     const msg: Message = { role: 'assistant', content: 'done', tool_calls: [] };
     expect(defaultPolicy.shouldContinue(msg)).toBe(false);
   });
+
+  test('completionAudit is off — the default profile stays compatible with existing runs', () => {
+    expect(defaultPolicy.completionAudit).toBe(false);
+  });
 });
 
 describe('seriousPolicy — the long-horizon profile', () => {
@@ -67,6 +71,11 @@ describe('seriousPolicy — the long-horizon profile', () => {
   test('apiMaxAttempts is higher than default — more blip-survival on a long run', () => {
     expect(seriousPolicy.apiMaxAttempts).toBe(5);
     expect(defaultPolicy.apiMaxAttempts).toBe(3);
+  });
+
+  test('completionAudit is on — a serious run audits its own completion before finishing', () => {
+    expect(seriousPolicy.completionAudit).toBe(true);
+    expect(defaultPolicy.completionAudit).toBe(false);
   });
 
   test('inherits the rest of the default policy', () => {

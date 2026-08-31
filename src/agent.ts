@@ -5,6 +5,14 @@ import { chat } from './client.ts';
 import { redactSecrets } from './redact.ts';
 import type { Message, Tool, Policy, FinalState, ToolCall, ToolDefinition } from './types.ts';
 
+// Injected once when the model first tries to finish under a completion-audit policy, forcing it
+// to prove the task is actually done (with tools) before we accept a no-tool answer as complete.
+const COMPLETION_AUDIT_PROMPT =
+  'Before finalizing, audit the task against the requested observable outcome. ' +
+  'Use tools now if any important behavior has not been empirically verified. ' +
+  'Check the final diff/state and relevant tests. If the result is already proven, ' +
+  'finish with the concise evidence.';
+
 function emitEvent(policy: Policy, event: Record<string, unknown>): void {
   if (!policy.onEvent) return;
   try {
@@ -118,6 +126,8 @@ export async function run(
   const toolDefs = tools.map((t) => t.definition);
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
   let turns = 0;
+  // Completion audit fires at most once per run() — this guards against re-triggering.
+  let completionAuditTriggered = false;
 
   while (turns < policy.maxTurns) {
     const contextMessages = policy.contextStrategy(allMessages);
@@ -219,8 +229,22 @@ export async function run(
       continue;
     }
 
-    // No tool calls — check shouldContinue
+    // No tool calls — the model wants to finish.
     if (!policy.shouldContinue(response.message)) {
+      // Completion audit: give the model exactly one enforced chance to verify before we accept
+      // a no-tool finish as done. Only fire when there's budget for a real tool-enabled turn
+      // (turns < maxTurns - 1) — otherwise the next turn would be the tool-less final synthesis,
+      // so at the ceiling we preserve normal completion instead of an empty extension.
+      if (
+        policy.completionAudit &&
+        !completionAuditTriggered &&
+        turns < policy.maxTurns - 1
+      ) {
+        completionAuditTriggered = true;
+        emitEvent(policy, { event: 'completion_audit', turn: turns });
+        allMessages.push({ role: 'user', content: COMPLETION_AUDIT_PROMPT });
+        continue;
+      }
       return {
         messages: allMessages,
         turns,
