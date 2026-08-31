@@ -233,13 +233,15 @@ describe('diffAgentStates', () => {
     expect(transitions.length).toBe(2);
   });
 
-test('agent_spawn round-trips the detached flag', async () => {
-  await appendRecord(registryPath, {
-    event: 'agent_spawn', pid: 7, parent_pid: 1, task: 't', out: '/o', err: '/e', ts: 'ts', detached: true,
+describe('AgentSpawnRecord detached field', () => {
+  test('agent_spawn round-trips the detached flag', async () => {
+    await appendRecord(registryPath, {
+      event: 'agent_spawn', pid: 7, parent_pid: 1, task: 't', out: '/o', err: '/e', ts: 'ts', detached: true,
+    });
+    const recs = await readRegistry(registryPath);
+    const spawn = recs.find((r) => r.event === 'agent_spawn') as AgentSpawnRecord;
+    expect(spawn.detached).toBe(true);
   });
-  const recs = await readRegistry(registryPath);
-  const spawn = recs.find((r) => r.event === 'agent_spawn') as AgentSpawnRecord;
-  expect(spawn.detached).toBe(true);
 });
 
   test('done transition carries exitStatus and stopReason', () => {

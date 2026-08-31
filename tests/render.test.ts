@@ -206,6 +206,10 @@ describe('render — awaiting_children', () => {
     const out = collect({ event: 'awaiting_children', pids: [1, 2, 3] }, RICH);
     expect(out).toContain('awaiting 3');
   });
+
+  test('quiet: omits it', () => {
+    expect(collect({ event: 'awaiting_children', pids: [1, 2, 3] }, QUIET)).toBe('');
+  });
 });
 
 // ── unknown events ────────────────────────────────────────────────────────────

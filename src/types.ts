@@ -62,8 +62,9 @@ export type Policy = {
     messages: Message[],
     emit: (event: Record<string, unknown>) => void,
   ) => Promise<Message[] | null>;
-  // Wait budget (ms, default 300000) for gathering still-running children. The default onFinish
-  // captures its own constant, so set this only alongside a custom onFinish that reads it.
+  // Advisory only: the default onFinish ignores this and always waits a fixed 300000ms. The field
+  // exists so a custom onFinish (the experiment surface) can read a wait budget from the policy;
+  // overriding it alone has no effect — override onFinish too.
   childWaitMs?: number;
 };
 

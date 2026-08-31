@@ -19,9 +19,11 @@ const EMPTY_RESPONSE_NUDGE =
   'Your last response was empty — no tool call and no answer. ' +
   'Either use a tool to keep working, or write your final answer now.';
 
-// A fixed, unique sentinel line that marks a strategy-checkpoint prompt. Detection keys off
-// content.includes(STRATEGY_CHECKPOINT_MARKER) (never equality), so the interpolated turn number
-// in the prompt body never breaks detection. The compactor (policy.ts) uses this to find checkpoints.
+// A fixed sentinel that OPENS a strategy-checkpoint prompt (it is the first line; the turn number
+// follows on the next line). The compactor (policy.ts) detects checkpoints with
+// content.startsWith(STRATEGY_CHECKPOINT_MARKER): a prefix match still tolerates the trailing turn
+// number, and — unlike includes — it won't misfire on a gathered child result that only contains the
+// marker mid-body (e.g. a child that printed agent.ts source).
 export const STRATEGY_CHECKPOINT_MARKER = '=== STRATEGY CHECKPOINT ===';
 
 // The checkpoint prompt: a mid-run reflection that re-focuses the model and gives the compactor a

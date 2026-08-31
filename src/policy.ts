@@ -16,7 +16,7 @@ export function compactByCheckpoints(messages: Message[]): Message[] {
   const completed: { promptIdx: number; summaryIdx: number }[] = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
-    if (m.role === 'user' && (m.content ?? '').includes(STRATEGY_CHECKPOINT_MARKER)) {
+    if (m.role === 'user' && (m.content ?? '').startsWith(STRATEGY_CHECKPOINT_MARKER)) { // startsWith, not includes: a real prompt opens with the marker; a child result only contains it mid-body.
       const next = messages[i + 1];
       if (next && next.role === 'assistant' && !next.tool_calls?.length) {
         completed.push({ promptIdx: i, summaryIdx: i + 1 });

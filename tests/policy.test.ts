@@ -177,4 +177,18 @@ describe('compactByCheckpoints — rolling evidence compaction', () => {
     expect(idxCall).toBeGreaterThanOrEqual(0);
     expect(idxResult).toBe(idxCall + 1);
   });
+
+  test('a child-result message whose body merely contains the marker is not a checkpoint', () => {
+    // A gathered child can print the marker verbatim (e.g. it read agent.ts source). That output is
+    // injected as a user message that only *contains* the marker mid-body; it must never open a false
+    // compaction boundary, or real pre-boundary context is silently dropped from the model's view.
+    const childResult: Message = {
+      role: 'user',
+      content: `Child agent 42 (task: read source) finished [ok]:\nsome text\n${STRATEGY_CHECKPOINT_MARKER}\nmore text`,
+    };
+    const working: Message = { role: 'assistant', content: 'working' };
+    const msgs = [sys, task, toolCall, toolResult, childResult, summary('S'), working];
+    // Nothing STARTS with the marker → no completed checkpoint → identity (same array reference).
+    expect(compactByCheckpoints(msgs)).toBe(msgs);
+  });
 });
