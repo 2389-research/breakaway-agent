@@ -66,6 +66,14 @@ never breaks it. (Contrast `COMPLETION_AUDIT_PROMPT`, a constant matched by equa
 checkpoint needs a marker because its text varies.) The model's response is the **checkpoint
 summary** — a dense, no-tool assistant message.
 
+**A checkpoint answer is not a finish.** The summary is a no-tool assistant message with
+content, which the finish classifier would otherwise read as `done` — ending the run right after
+every checkpoint. So the loop must remember it just injected a checkpoint and, when the answer
+comes back with no tool calls, **skip the finish branch and continue** (the reflection is
+mid-run, not a completion). A model that truly has nothing left simply finishes one turn later,
+on a normal turn. (A `BLOCKED:` answer to a checkpoint is likewise skipped this once; the model
+re-blocks on the next turn and it is caught then — a one-turn delay, not a lost signal.)
+
 **Compaction.** `contextStrategy` (identity today, `policy.ts:11`) becomes a compactor. Given
 the full `allMessages`, it returns a view:
 
