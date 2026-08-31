@@ -169,6 +169,71 @@ describe('bash handler', () => {
   });
 });
 
+describe('edit_file handler', () => {
+  test('has edit_file tool', () => {
+    expect(findTool('edit_file')).toBeDefined();
+  });
+
+  test('one exact match changes only that occurrence', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    await Bun.write(filePath, 'alpha\nbeta\ngamma\n');
+    const result = await findTool('edit_file')!.handler({ path: filePath, old_text: 'beta', new_text: 'BETA' });
+    expect(result).toMatch(/replaced 1/i);
+    expect(result).toMatch(/lines 2-2/);
+    expect(await Bun.file(filePath).text()).toBe('alpha\nBETA\ngamma\n');
+  });
+
+  test('zero matches returns an actionable error and leaves the file unchanged', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    await Bun.write(filePath, 'alpha\nbeta\n');
+    const result = await findTool('edit_file')!.handler({ path: filePath, old_text: 'zeta', new_text: 'X' });
+    expect(result).toMatch(/error/i);
+    expect(result).toMatch(/no match|not found/i);
+    expect(await Bun.file(filePath).text()).toBe('alpha\nbeta\n');
+  });
+
+  test('multiple matches returns an ambiguity error and leaves the file unchanged', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    await Bun.write(filePath, 'x\nx\nx\n');
+    const result = await findTool('edit_file')!.handler({ path: filePath, old_text: 'x', new_text: 'y' });
+    expect(result).toMatch(/error/i);
+    expect(result).toMatch(/3 match|ambiguous/i);
+    expect(await Bun.file(filePath).text()).toBe('x\nx\nx\n');
+  });
+
+  test('replacement works with multiline text', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    await Bun.write(filePath, 'a\nOLD1\nOLD2\nb\n');
+    await findTool('edit_file')!.handler({ path: filePath, old_text: 'OLD1\nOLD2', new_text: 'NEW' });
+    expect(await Bun.file(filePath).text()).toBe('a\nNEW\nb\n');
+  });
+
+  test('preserves unrelated content byte-for-byte and treats $-sequences in new_text literally', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    // The `$1` in unrelated content and the `$&`/`$1` in new_text must survive verbatim —
+    // this is why the replace is done by index, not String.prototype.replace.
+    await Bun.write(filePath, 'keep $1 this\ntarget\nkeep {braces} too\n');
+    await findTool('edit_file')!.handler({ path: filePath, old_text: 'target', new_text: '$& and $1' });
+    expect(await Bun.file(filePath).text()).toBe('keep $1 this\n$& and $1\nkeep {braces} too\n');
+  });
+
+  test('deletes text when new_text is empty', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    await Bun.write(filePath, 'aXb');
+    const result = await findTool('edit_file')!.handler({ path: filePath, old_text: 'X', new_text: '' });
+    expect(result).toMatch(/replaced 1/i);
+    expect(await Bun.file(filePath).text()).toBe('ab');
+  });
+
+  test('rejects missing/empty args before touching the file', async () => {
+    const filePath = join(tmpDir, 'edit.txt');
+    expect(await findTool('edit_file')!.handler({ old_text: 'a', new_text: 'b' })).toContain('missing required field: path');
+    expect(await findTool('edit_file')!.handler({ path: filePath, new_text: 'b' })).toContain('missing required field: old_text');
+    expect(await findTool('edit_file')!.handler({ path: filePath, old_text: '', new_text: 'b' })).toContain('missing required field: old_text');
+    expect(await findTool('edit_file')!.handler({ path: filePath, old_text: 'a' })).toContain('missing required field: new_text');
+  });
+});
+
 describe('tool argument validation', () => {
   test('bash rejects the wrong argument key without executing', async () => {
     const tool = findTool('bash')!;

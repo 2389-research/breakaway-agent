@@ -2,7 +2,8 @@
 // ABOUTME: Output capped at 8000 chars; bash captures stdout, stderr, and exit code.
 
 import type { Tool } from './types.ts';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
+import { rename, unlink } from 'node:fs/promises';
 import { defaultTranscriptDir } from './transcript.ts';
 import { appendRecord } from './registry.ts';
 
@@ -107,6 +108,74 @@ const writeFile: Tool = {
     } catch (err) {
       return `error: ${String(err)}`;
     }
+  },
+};
+
+const editFile: Tool = {
+  definition: {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description:
+        'Replace an exact snippet in a file. Use after reading the target file. `old_text` must match ' +
+        'the current file exactly, whitespace included. The tool refuses zero matches or ambiguous ' +
+        'multiple matches — include enough surrounding context that `old_text` occurs exactly once.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute or relative path to the file.' },
+          old_text: { type: 'string', description: 'Exact text to replace. Must occur exactly once in the file.' },
+          new_text: { type: 'string', description: 'Replacement text. May be empty to delete old_text.' },
+        },
+        required: ['path', 'old_text', 'new_text'],
+      },
+    },
+  },
+  async handler(args) {
+    if (typeof args['path'] !== 'string' || args['path'] === '') return missingField('path');
+    if (typeof args['old_text'] !== 'string' || args['old_text'] === '') return missingField('old_text');
+    // new_text may be empty — deleting old_text is a valid edit — so it only has to be a string.
+    if (typeof args['new_text'] !== 'string') return missingField('new_text', 'expected a string');
+    const filePath = args['path'];
+    const oldText = args['old_text'];
+    const newText = args['new_text'];
+
+    let content: string;
+    try {
+      content = await Bun.file(filePath).text();
+    } catch (err) {
+      return `error: cannot read ${filePath}: ${String(err)}`;
+    }
+
+    // Exact, non-overlapping occurrence count. Refuse anything but a unique match — no guessing.
+    const count = content.split(oldText).length - 1;
+    if (count === 0) {
+      return `error: no match for old_text in ${filePath}; re-read the file and copy the exact text, whitespace included`;
+    }
+    if (count > 1) {
+      return `error: old_text is ambiguous — ${count} matches in ${filePath}; include more surrounding context so it occurs exactly once`;
+    }
+
+    // Replace by index, not String.replace, so `$&`/`$1` in new_text stay literal.
+    const idx = content.indexOf(oldText);
+    const updated = content.slice(0, idx) + newText + content.slice(idx + oldText.length);
+
+    // Affected line range: 1-based start line of the match, through the last line old_text spans.
+    const startLine = content.slice(0, idx).split('\n').length;
+    const endLine = startLine + oldText.split('\n').length - 1;
+
+    // Atomic write: stage in a temp file in the SAME directory, then rename over the target. A crash
+    // mid-write leaves the original intact — the rename only happens once the full content is on disk.
+    const tmpPath = join(dirname(filePath), `.${basename(filePath)}.edit-${process.pid}.tmp`);
+    try {
+      await Bun.write(tmpPath, updated);
+      await rename(tmpPath, filePath);
+    } catch (err) {
+      try { await unlink(tmpPath); } catch { /* nothing staged to clean up */ }
+      return `error: could not write ${filePath}: ${String(err)}`;
+    }
+
+    return `replaced 1 occurrence in ${filePath} (lines ${startLine}-${endLine}); ${updated.length} chars`;
   },
 };
 
@@ -274,4 +343,4 @@ const spawnAgent: Tool = {
   },
 };
 
-export const tools: Tool[] = [readFile, writeFile, bash, spawnAgent];
+export const tools: Tool[] = [readFile, writeFile, editFile, bash, spawnAgent];
