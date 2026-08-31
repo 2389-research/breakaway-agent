@@ -147,8 +147,12 @@ Children spawn detached and survive the parent's exit. Today the parent gets a `
 <outFile>` hint per child and must read each by hand. This makes the gather automatic and
 blocks the parent from finishing while it still owes results to children it spawned.
 
-**Seam:** new optional `onFinish(messages: Message[]) => Promise<Message[] | null>`. The loop
-awaits it inside the `'done'` branch, before the completion audit:
+**Seam:** new optional `onFinish(messages, emit) => Promise<Message[] | null>`, where
+`emit: (event: Record<string, unknown>) => void` is the loop's own event emitter, passed in so the
+gather step can surface `awaiting_children`/`child_result` events without the loop knowing anything
+child-specific (the default `onFinish` is built at module load, before `runTask` attaches the live
+`onEvent`, so it cannot close over the emitter — it must be handed in). The loop awaits it inside
+the `'done'` branch, before the completion audit:
 - returns a non-empty `Message[]` → push them to `allMessages` and `continue` (the model
   incorporates the results, then tries to finish again).
 - returns `null`/empty → proceed to the audit, then `done`.
@@ -156,9 +160,9 @@ awaits it inside the `'done'` branch, before the completion audit:
 Registry I/O lives in a **new `src/children.ts`**, keeping `agent.ts` subagent-agnostic.
 
 `gatherChildren(messages, opts)` takes its dependencies as an injected options bag —
-`deliveredPids: Set<number>`, `waitMs`, `transcriptDir`, `selfPid` — so tests drive it with a
-temp registry, a pre-seeded delivered set, and a tiny `waitMs`; no hidden module globals, no
-real wall-clock wait. The default `onFinish` in `policy.ts` owns the process-lifetime
+`deliveredPids: Set<number>`, `waitMs`, `transcriptDir`, `selfPid`, `emit` — so tests drive it with a
+temp registry, a pre-seeded delivered set, a tiny `waitMs`, and a capturing `emit`; no hidden module
+globals, no real wall-clock wait. The default `onFinish` in `policy.ts` owns the process-lifetime
 `deliveredPids` set and passes it in. (children.ts is ordinary app code, so `Date.now`/`setTimeout`
 for the poll are fine here — the no-`Date.now` rule is a workflow-script constraint, not ours.)
 
@@ -192,7 +196,8 @@ hand. Use `spawn_agent(detach: true)` only for fire-and-forget work whose result
 
 `src/types.ts`:
 - `Policy`: remove `isComplete`; add `classifyFinish: (msg: Message) => 'done' | 'blocked' | 'empty'`;
-  add `strategyCheckpointEvery?: number`; add `onFinish?: (messages: Message[]) => Promise<Message[] | null>`;
+  add `strategyCheckpointEvery?: number`;
+  add `onFinish?: (messages: Message[], emit: (event: Record<string, unknown>) => void) => Promise<Message[] | null>`;
   add `childWaitMs?: number`. `contextStrategy` stays (default becomes the compactor).
 - `FinalState.stopReason`: add `'blocked'`.
 
