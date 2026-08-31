@@ -39,6 +39,7 @@ export function buildSpawnArgs(params: {
 }
 
 const OUTPUT_CAP = 8000;
+const DEFAULT_MAX_LINES = 400;
 
 function cap(output: string): string {
   if (output.length <= OUTPUT_CAP) return output;
@@ -52,16 +53,31 @@ function missingField(field: string, detail = 'expected a non-empty string'): st
   return `error: missing required field: ${field} (${detail})`;
 }
 
+// Validate an optional positive-integer arg. Returns an error string if present-but-invalid,
+// or null if absent (use the default) or valid. Absent means undefined/null, not 0.
+function badPositiveInt(field: string, value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    return `error: read_file.${field} must be an integer >= 1`;
+  }
+  return null;
+}
+
 const readFile: Tool = {
   definition: {
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read the contents of a file at the given path.',
+      description:
+        'Read a file. Optionally read a line window with start_line (1-based, default 1) and max_lines. ' +
+        'Ranged reads return range metadata (total lines and next_start_line) so you can page through a ' +
+        'large file deterministically instead of fighting output truncation.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Absolute or relative path to the file.' },
+          start_line: { type: 'number', description: '1-based line to start reading at (default 1).' },
+          max_lines: { type: 'number', description: `Maximum lines to return (default ${DEFAULT_MAX_LINES}).` },
         },
         required: ['path'],
       },
@@ -69,14 +85,56 @@ const readFile: Tool = {
   },
   async handler(args) {
     if (typeof args['path'] !== 'string' || args['path'] === '') return missingField('path');
+    const startErr = badPositiveInt('start_line', args['start_line']);
+    if (startErr) return startErr;
+    const maxErr = badPositiveInt('max_lines', args['max_lines']);
+    if (maxErr) return maxErr;
+
     const filePath = args['path'];
+    let text: string;
     try {
-      const file = Bun.file(filePath);
-      const text = await file.text();
-      return cap(text);
+      text = await Bun.file(filePath).text();
     } catch (err) {
       return `error: ${String(err)}`;
     }
+
+    const rangeRequested = args['start_line'] != null || args['max_lines'] != null;
+    const start = (args['start_line'] as number | undefined) ?? 1;
+    const limit = (args['max_lines'] as number | undefined) ?? DEFAULT_MAX_LINES;
+
+    // split('\n') is a perfect inverse of join('\n'), so windows reconstruct the file exactly —
+    // this preserves empty files (['']) and a final line with no trailing newline.
+    const lines = text.split('\n');
+    const total = lines.length;
+
+    // No range requested and the whole file fits under the cap: return it verbatim, as before.
+    if (!rangeRequested && total <= limit && text.length <= OUTPUT_CAP) {
+      return text;
+    }
+
+    const startIdx = start - 1;
+    if (startIdx >= total) {
+      return `error: start_line ${start} is past end of file (${total} lines)`;
+    }
+
+    let endExcl = Math.min(startIdx + limit, total);
+    let body = lines.slice(startIdx, endExcl).join('\n');
+    // Enforce the output cap by dropping whole lines from the end, so range identity stays honest
+    // (report the range actually returned) instead of mid-line truncation.
+    while (endExcl - startIdx > 1 && body.length > OUTPUT_CAP) {
+      endExcl--;
+      body = lines.slice(startIdx, endExcl).join('\n');
+    }
+    // A single requested line longer than the cap: head-truncate it but keep its line identity.
+    if (endExcl - startIdx === 1 && body.length > OUTPUT_CAP) {
+      body = body.slice(0, OUTPUT_CAP) + '\n[line truncated]';
+    }
+
+    const hasMore = endExcl < total;
+    const meta = hasMore
+      ? `[lines ${start}-${endExcl} of ${total}; next_start_line=${endExcl + 1}]`
+      : `[lines ${start}-${endExcl} of ${total}; end of file]`;
+    return `${meta}\n${body}`;
   },
 };
 

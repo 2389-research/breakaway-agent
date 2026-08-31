@@ -84,6 +84,95 @@ describe('read_file handler', () => {
   });
 });
 
+describe('read_file ranged reading', () => {
+  test('small file with no range args returns raw content, no metadata', async () => {
+    const fp = join(tmpDir, 'small.txt');
+    await Bun.write(fp, 'one\ntwo\nthree');
+    const result = await findTool('read_file')!.handler({ path: fp });
+    expect(result).toBe('one\ntwo\nthree'); // byte-identical, no [lines ...] prefix
+  });
+
+  test('start_line is 1-based', async () => {
+    const fp = join(tmpDir, 'lines.txt');
+    await Bun.write(fp, 'L1\nL2\nL3\nL4\nL5');
+    const result = await findTool('read_file')!.handler({ path: fp, start_line: 1, max_lines: 1 });
+    const body = result.split('\n').slice(1).join('\n');
+    expect(body).toBe('L1'); // start_line 1 is the first line, not L2
+  });
+
+  test('requested middle range is exact', async () => {
+    const fp = join(tmpDir, 'lines.txt');
+    await Bun.write(fp, 'L1\nL2\nL3\nL4\nL5');
+    const result = await findTool('read_file')!.handler({ path: fp, start_line: 2, max_lines: 2 });
+    const body = result.split('\n').slice(1).join('\n');
+    expect(body).toBe('L2\nL3');
+  });
+
+  test('range metadata reports total and next_start_line', async () => {
+    const fp = join(tmpDir, 'lines.txt');
+    await Bun.write(fp, 'L1\nL2\nL3\nL4\nL5');
+    const result = await findTool('read_file')!.handler({ path: fp, start_line: 2, max_lines: 2 });
+    expect(result).toMatch(/\[lines 2-3 of 5; next_start_line=4\]/);
+  });
+
+  test('final window reports end of file instead of a next pointer', async () => {
+    const fp = join(tmpDir, 'lines.txt');
+    await Bun.write(fp, 'L1\nL2\nL3');
+    const result = await findTool('read_file')!.handler({ path: fp, start_line: 2, max_lines: 10 });
+    expect(result).toMatch(/of 3; end of file\]/);
+    expect(result).not.toMatch(/next_start_line/);
+  });
+
+  test('start_line past end of file is an actionable error', async () => {
+    const fp = join(tmpDir, 'lines.txt');
+    await Bun.write(fp, 'L1\nL2');
+    const result = await findTool('read_file')!.handler({ path: fp, start_line: 99 });
+    expect(result).toMatch(/error/i);
+    expect(result).toMatch(/past end of file/i);
+  });
+
+  test('oversized file with no range args returns the head window with a continuation hint, not the tail', async () => {
+    const fp = join(tmpDir, 'big.txt');
+    const lines = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`);
+    await Bun.write(fp, lines.join('\n'));
+    const result = await findTool('read_file')!.handler({ path: fp });
+    expect(result).toMatch(/\[lines 1-\d+ of 3000; next_start_line=\d+\]/); // range identity preserved
+    expect(result).toMatch(/\bline 1\b/); // head is present...
+    expect(result).not.toContain('line 3000'); // ...not the tail
+  });
+
+  test('invalid start_line and max_lines produce useful errors', async () => {
+    const fp = join(tmpDir, 'lines.txt');
+    await Bun.write(fp, 'L1\nL2');
+    expect(await findTool('read_file')!.handler({ path: fp, start_line: 0 })).toMatch(/start_line/);
+    expect(await findTool('read_file')!.handler({ path: fp, start_line: 1.5 })).toMatch(/start_line/);
+    expect(await findTool('read_file')!.handler({ path: fp, max_lines: 0 })).toMatch(/max_lines/);
+    expect(await findTool('read_file')!.handler({ path: fp, max_lines: -3 })).toMatch(/max_lines/);
+  });
+
+  test('sequential ranged reads reconstruct a 2000-line file without gaps or duplicates', async () => {
+    const fp = join(tmpDir, 'huge.txt');
+    const original = Array.from({ length: 2000 }, (_, i) => `line ${String(i + 1).padStart(4, '0')}`).join('\n');
+    await Bun.write(fp, original);
+
+    const tool = findTool('read_file')!;
+    const bodies: string[] = [];
+    let start = 1;
+    let guard = 0;
+    for (;;) {
+      if (guard++ > 100) throw new Error('pagination did not terminate');
+      const result = await tool.handler({ path: fp, start_line: start, max_lines: 500 });
+      const nl = result.indexOf('\n');
+      const meta = result.slice(0, nl);
+      bodies.push(result.slice(nl + 1));
+      const m = meta.match(/next_start_line=(\d+)/);
+      if (!m) break; // reached end of file
+      start = Number(m[1]);
+    }
+    expect(bodies.join('\n')).toBe(original);
+  });
+});
+
 describe('bash handler', () => {
   test('captures stdout', async () => {
     const tool = findTool('bash')!;
