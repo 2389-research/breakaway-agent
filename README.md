@@ -1,6 +1,6 @@
 # break-away
 
-A deliberately tiny, hackable code agent. An experiment platform for exploring agent loop design — swappable policy, context strategy, tools, and system prompt, all in ~300 lines.
+A deliberately tiny, hackable code agent. An experiment platform for exploring agent loop design — swappable policy, context strategy, tools, and system prompt, with a policy-blind core loop you can read in one sitting.
 
 ## ⚠ YOLO MODE — no guardrails
 
@@ -31,6 +31,8 @@ bun src/index.ts
 --cwd <path>     Change working directory before running tools
 --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL)
 --system <path>  Path to system prompt file (default: system.txt)
+--serious        Long-horizon profile: 80 turns, extra API-retry headroom,
+                 and a completion audit that verifies before accepting a finish
 --max-turns <n>  Override the loop turn budget (default: policy's maxTurns)
 --quiet          Minimal progress: tool calls and stats only
 --debug          Rich view plus API timing and fuller result excerpts
@@ -44,6 +46,16 @@ bun src/index.ts "describe the project" > answer.txt
 
 **Transcripts** are written as JSONL to `.transcripts/` (or `$BREAK_AWAY_TRANSCRIPT_DIR`). Each run gets its own file.
 
+## Tools
+
+The model drives five tools:
+
+- `read_file(path, start_line?, max_lines?)` — read a whole file, or page a large one by line window. Ranged reads return `[lines X-Y of N; next_start_line=Z]` metadata so the model can walk a big file deterministically.
+- `write_file(path, content)` — create or overwrite a file.
+- `edit_file(path, old_text, new_text)` — exact-match, single-occurrence replacement written atomically. Refuses (unchanged file) if `old_text` matches zero times or more than once.
+- `bash(cmd, timeout_ms?)` — run a shell command; on timeout the whole process group is killed. Output is capped to the last 8000 chars.
+- `spawn_agent(task, cwd?)` — launch a detached child agent (see Subagents).
+
 ## Hacking it
 
 **Add a tool:** append one object `{definition, handler}` to the array in `src/tools.ts`. That's it.
@@ -54,7 +66,7 @@ bun src/index.ts "describe the project" > answer.txt
 
 **Swap context strategy:** replace `contextStrategy` in `src/policy.ts` with a function that filters or trims the message array. A sliding-window example lives in `e2e/seam-proof.ts`.
 
-**The loop itself** is ~90 lines in `src/agent.ts`. All behavior is injected through `Policy` — the loop is policy-blind.
+**The loop itself** is the `run()` function in `src/agent.ts` (~150 lines; the file is ~265 with the retry and tool-dispatch helpers). All behavior is injected through `Policy` — the loop is policy-blind.
 
 ## Self-modification
 
@@ -79,7 +91,7 @@ The agent can edit its own source files and reload or restart without restarting
 spawn_agent(task="...", cwd="/path/to/work")
 ```
 
-The child runs `bun src/index.ts` in the background. Its stdout goes to a `spawn-<ts>.out` file in the transcript directory; stderr to `spawn-<ts>.err`. The parent gets back the pid and file paths immediately, and renders a `◆ spawned agent <pid>` block to stderr.
+In source mode the child runs `bun src/index.ts` in the background; the compiled binary spawns itself instead (`process.execPath`). Either way, its stdout goes to a `spawn-<ts>.out` file in the transcript directory; stderr to `spawn-<ts>.err`. The parent gets back the pid and file paths immediately, and renders a `◆ spawned agent <pid>` block to stderr.
 
 Agent depth is tracked via `BREAK_AWAY_DEPTH` (default 0). `BREAK_AWAY_MAX_DEPTH` (default 3) caps nesting — spawn_agent returns an error rather than launching when the cap is reached.
 
@@ -117,7 +129,7 @@ Produces a self-contained `break-away` binary (~61 MB) via `bun build --compile`
 ```
 
 **What works in the binary (everything):**
-- All tools (read_file, write_file, bash, spawn_agent), subagents, REPL
+- All tools (read_file, write_file, edit_file, bash, spawn_agent), subagents, REPL
 - Transcripts — written to `~/.break-away/transcripts/` (or `$BREAK_AWAY_TRANSCRIPT_DIR`)
 - `.env` is picked up automatically from the launch directory
 

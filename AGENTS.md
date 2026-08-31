@@ -9,7 +9,8 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
 ## What this is
 
 - `bun src/index.ts "task"` — one-shot. `bun src/index.ts` — REPL.
-- Flags: `--cwd`, `--model`, `--system`, `--max-turns`, `--quiet`, `--debug`, `--help`.
+- Flags: `--cwd`, `--model`, `--system`, `--serious`, `--max-turns`, `--quiet`, `--debug`, `--help`.
+- `--serious`: long-horizon profile (`seriousPolicy` in policy.ts) — 80 turns, `apiMaxAttempts: 5`, `completionAudit: true`. `--max-turns` still overrides just the turn budget on top.
 - Output tiers: `--quiet` (tool calls + stats), default `rich` (reasoning + interim prose + tool snippets), `--debug` (rich + api_ms + longer excerpts). `--quiet` and `--debug` are mutually exclusive.
 - **Pure YOLO by design**: no permission prompts, no sandbox, no confirmation
   gates. The agent executes whatever the model asks. This is intentional
@@ -19,8 +20,13 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
 
 - `src/agent.ts` — `run(messages, tools, policy)`. Nothing else enters the loop.
 - `src/tools.ts` — array of `{definition, handler}`. New tool = append one object.
+  Current set: `read_file` (whole-file or ranged by `start_line`/`max_lines`),
+  `write_file`, `edit_file` (exact-match atomic replace), `bash`, `spawn_agent`.
 - `src/policy.ts` — the experiment surface: `maxTurns`, `onToolError`,
-  `contextStrategy`, `shouldContinue`, `onEvent` (transcript observer).
+  `contextStrategy`, `shouldContinue`, `onEvent` (transcript observer),
+  `apiMaxAttempts`/`apiRetryBaseMs` (in-loop transient-error retry; a retry
+  costs backoff, not a turn), `completionAudit` (one enforced verify pass
+  before a no-tool finish counts as done).
 - `system.txt` — prompt is data; swap with `--system <path>`.
 - `src/transcript.ts` — every run appends JSONL to `.transcripts/` (anchored to
   the source dir, never the `--cwd` target).
@@ -54,7 +60,7 @@ Relaunches break-away on exit code 42 (`RESTART_EXIT_CODE`), up to `BREAK_AWAY_M
 
 ## spawn_agent tool
 
-Launches a detached child agent via `nohup bun src/index.ts ... &`. Child survives parent exit. Depth-guarded: `BREAK_AWAY_DEPTH` tracks nesting; `BREAK_AWAY_MAX_DEPTH` (default 3) sets the cap. Results go to `spawn-<ts>.out`/`.err` in the transcript directory.
+Launches a detached child agent via `nohup bun src/index.ts ... &` in source mode (the binary spawns itself via `process.execPath` — see Binary mode). Child survives parent exit. Depth-guarded: `BREAK_AWAY_DEPTH` tracks nesting; `BREAK_AWAY_MAX_DEPTH` (default 3) sets the cap. Results go to `spawn-<ts>.out`/`.err` in the transcript directory.
 
 The spawn renders a `◆ spawned agent <pid>` block to stderr immediately. A 2-second background poll watches for state transitions and prints `◆ agent <pid> done (<age>s)` or `✗ agent <pid> died (<age>s)` to stderr as they happen. After one-shot completes, still-running children are listed with `tail -f` hints.
 
