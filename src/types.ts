@@ -62,7 +62,8 @@ export type Policy = {
     messages: Message[],
     emit: (event: Record<string, unknown>) => void,
   ) => Promise<Message[] | null>;
-  // Max total time the default onFinish (child gather) waits for still-running children (default 300000).
+  // Wait budget (ms, default 300000) for gathering still-running children. The default onFinish
+  // captures its own constant, so set this only alongside a custom onFinish that reads it.
   childWaitMs?: number;
 };
 
