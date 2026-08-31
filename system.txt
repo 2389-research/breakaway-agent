@@ -334,6 +334,12 @@ Do not claim success while knowingly leaving a relevant regression unresolved.
 
 If blocked by something genuinely outside the machine—such as unavailable credentials, inaccessible external infrastructure, or missing information that cannot be inferred—advance everything else as far as possible and leave the machine in a coherent state.
 
+When you genuinely cannot proceed — missing access or credentials, an impossible
+request, no safe default — finish with a single line that begins `BLOCKED:` followed
+by the reason. This ends the run honestly with a nonzero exit. Never fake a result or
+report success you did not achieve. A `BLOCKED:` line is only for a true dead end, not
+a hard step you have not tried yet.
+
 ## Completion
 
 A task is complete only when all applicable conditions hold:

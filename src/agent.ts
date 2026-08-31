@@ -223,8 +223,22 @@ export async function run(
       continue;
     }
 
-    // No tool calls — the model is trying to finish.
-    if (policy.isComplete(response.message)) {
+    // No tool calls — the model is trying to finish. Classify the finish state.
+    const finish = policy.classifyFinish(response.message);
+
+    if (finish === 'blocked') {
+      // The model has declared it cannot proceed. Honest terminal state: no audit, no gather —
+      // the single BLOCKED: line rides out as the final assistant message and the run exits nonzero.
+      return {
+        messages: allMessages,
+        turns,
+        usage,
+        elapsed: Date.now() - start,
+        stopReason: 'blocked',
+      };
+    }
+
+    if (finish === 'done') {
       // A real answer clears any prior blank streak.
       emptyResponses = 0;
       // Completion audit: give the model exactly one enforced chance to verify before we accept
@@ -251,7 +265,7 @@ export async function run(
       };
     }
 
-    // Not an acceptable finish: a blank response — no tool calls and empty content. "No tool calls"
+    // finish === 'empty': a blank response — no tool calls and empty content. "No tool calls"
     // alone must never count as success. Nudge the model to act or give a real answer; after
     // maxEmptyRetries consecutive blanks, end honestly with 'error' instead of a false 'done'.
     emptyResponses++;

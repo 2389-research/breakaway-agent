@@ -81,6 +81,16 @@ export function exitCodeForStopReason(stopReason: FinalState['stopReason']): num
   return stopReason === 'done' ? 0 : 1;
 }
 
+// Map a stop reason to the coarse ok/error status recorded in the registry. Only a clean finish
+// and an incomplete-but-not-crashed cap are 'ok'; error, abort, and a self-declared block are
+// 'error'. Ruling: 'blocked' is 'error' here — a blocked child must never read as green to its
+// parent, even though the full stop_reason is recorded alongside for the honest detail.
+export function statusForStopReason(stopReason: FinalState['stopReason']): 'ok' | 'error' {
+  return stopReason === 'error' || stopReason === 'aborted' || stopReason === 'blocked'
+    ? 'error'
+    : 'ok';
+}
+
 const USAGE = `
 Usage: bun src/index.ts [OPTIONS] [TASK]
 
@@ -328,7 +338,7 @@ async function runTask(
   render(doneEvent, renderCfg, (s) => process.stderr.write(s));
 
   // agent_done registry record with status derived from stop reason.
-  const agentDoneStatus: 'ok' | 'error' = (state.stopReason === 'error' || state.stopReason === 'aborted') ? 'error' : 'ok';
+  const agentDoneStatus = statusForStopReason(state.stopReason);
   await appendRecord(registryPath(), {
     event: 'agent_done',
     pid: process.pid,

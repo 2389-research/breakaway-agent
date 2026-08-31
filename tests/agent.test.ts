@@ -656,6 +656,22 @@ describe('agent run — completion audit (catch false victory)', () => {
   });
 });
 
+describe('agent run — blocked finish', () => {
+  test('a BLOCKED: finish returns stopReason blocked with no audit turn', async () => {
+    mockChat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'BLOCKED: missing database credentials' },
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      finish_reason: 'stop',
+    });
+
+    // completionAudit ON to prove a block short-circuits it — there must be no second chat call.
+    const state = await run(initialMessages(), [], makePolicy({ completionAudit: true }));
+    expect(state.stopReason).toBe('blocked');
+    expect(state.turns).toBe(1);
+    expect(mockChat).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('agent run — honest completion (a blank finish is not success)', () => {
   const emptyFinish = () => ({
     message: { role: 'assistant' as const, content: '' },

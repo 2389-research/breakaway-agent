@@ -9,10 +9,15 @@ export const defaultPolicy: Policy = {
   maxTurns: Infinity,
   onToolError: 'retry',
   contextStrategy: (messages: Message[]) => messages,
-  // A finish must be a real answer: assistant role, no pending tool calls, non-empty content.
-  // A blank no-tool response fails this gate, so it can never be mistaken for a completed run.
-  isComplete: (msg: Message) =>
-    msg.role === 'assistant' && !msg.tool_calls?.length && (msg.content ?? '').trim() !== '',
+  // A finish must be a real answer, an honest block, or a blank. A blank no-tool response is
+  // 'empty' (never 'done'); a line beginning BLOCKED: is an honest terminal state.
+  classifyFinish: (msg: Message): 'done' | 'blocked' | 'empty' => {
+    if (msg.role !== 'assistant' || msg.tool_calls?.length) return 'empty';
+    const content = (msg.content ?? '').trim();
+    if (content === '') return 'empty';
+    if (/^BLOCKED:/i.test(content)) return 'blocked';
+    return 'done';
+  },
   // Survival by default: retry transient gateway blips so a run finishes instead of dying at turn N.
   apiMaxAttempts: 3,
   apiRetryBaseMs: 750,

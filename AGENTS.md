@@ -23,7 +23,8 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
   Current set: `read_file` (whole-file or ranged by `start_line`/`max_lines`),
   `write_file`, `edit_file` (exact-match atomic replace), `bash`, `spawn_agent`.
 - `src/policy.ts` — the experiment surface: `maxTurns`, `onToolError`,
-  `contextStrategy`, `isComplete` (is this no-tool message a real finish? default:
+  `contextStrategy`, `classifyFinish` (is this no-tool message `done`, `blocked`, or
+  `empty`? default:
   non-empty content — a blank answer never counts as done), `onEvent` (transcript
   observer), `apiMaxAttempts`/`apiRetryBaseMs` (in-loop transient-error retry; a
   retry costs backoff, not a turn), `maxEmptyRetries` (nudges on a blank finish

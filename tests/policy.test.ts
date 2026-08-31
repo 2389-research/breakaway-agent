@@ -34,33 +34,43 @@ describe('defaultPolicy', () => {
     expect(result[0].role).toBe('system');
   });
 
-  test('isComplete accepts a real finish — assistant, content, no tool calls', () => {
+  test('classifyFinish returns done for a real finish — assistant, content, no tool calls', () => {
     const msg: Message = { role: 'assistant', content: 'here is the answer' };
-    expect(defaultPolicy.isComplete(msg)).toBe(true);
+    expect(defaultPolicy.classifyFinish(msg)).toBe('done');
   });
 
-  test('isComplete rejects a blank finish — empty content is not an answer', () => {
+  test('classifyFinish returns empty for a blank finish — whitespace is not an answer', () => {
     const msg: Message = { role: 'assistant', content: '   ' };
-    expect(defaultPolicy.isComplete(msg)).toBe(false);
+    expect(defaultPolicy.classifyFinish(msg)).toBe('empty');
   });
 
-  test('isComplete rejects a message that still has tool calls — the model is not done', () => {
+  test('classifyFinish returns empty when tool calls are still pending', () => {
     const msg: Message = {
       role: 'assistant',
       content: '',
       tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
     };
-    expect(defaultPolicy.isComplete(msg)).toBe(false);
+    expect(defaultPolicy.classifyFinish(msg)).toBe('empty');
   });
 
-  test('isComplete rejects a non-assistant message', () => {
+  test('classifyFinish returns empty for a non-assistant message', () => {
     const msg: Message = { role: 'user', content: 'hi' };
-    expect(defaultPolicy.isComplete(msg)).toBe(false);
+    expect(defaultPolicy.classifyFinish(msg)).toBe('empty');
   });
 
-  test('isComplete treats an empty tool_calls array as a real finish when content is present', () => {
+  test('classifyFinish returns done with an empty tool_calls array when content is present', () => {
     const msg: Message = { role: 'assistant', content: 'done', tool_calls: [] };
-    expect(defaultPolicy.isComplete(msg)).toBe(true);
+    expect(defaultPolicy.classifyFinish(msg)).toBe('done');
+  });
+
+  test('classifyFinish returns blocked for a BLOCKED: line', () => {
+    const msg: Message = { role: 'assistant', content: 'BLOCKED: no AWS credentials in this environment' };
+    expect(defaultPolicy.classifyFinish(msg)).toBe('blocked');
+  });
+
+  test('classifyFinish detects BLOCKED case-insensitively and after leading whitespace', () => {
+    const msg: Message = { role: 'assistant', content: '   blocked: cannot reach the database' };
+    expect(defaultPolicy.classifyFinish(msg)).toBe('blocked');
   });
 
   test('maxEmptyRetries is 1 — one nudge on a blank finish, then the run errors', () => {
@@ -88,7 +98,7 @@ describe('seriousPolicy — the long-horizon profile', () => {
 
   test('inherits the rest of the default policy', () => {
     expect(seriousPolicy.onToolError).toBe(defaultPolicy.onToolError);
-    expect(seriousPolicy.isComplete).toBe(defaultPolicy.isComplete);
+    expect(seriousPolicy.classifyFinish).toBe(defaultPolicy.classifyFinish);
   });
 });
 

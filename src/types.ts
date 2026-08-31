@@ -36,9 +36,10 @@ export type Policy = {
   maxTurns: number;
   onToolError: 'retry' | 'abort' | 'nudge';
   contextStrategy: (messages: Message[]) => Message[];
-  // Accept this no-tool message as a finished run? Default: assistant role, no tool calls, and
-  // non-empty content. A blank finish fails the gate, so "no tool calls" alone never means done.
-  isComplete: (lastMessage: Message) => boolean;
+  // Classify a no-tool finish attempt: 'done' = a real answer; 'blocked' = the model declared it
+  // cannot proceed (a line beginning BLOCKED:); 'empty' = a blank turn that is not an answer.
+  // One seam owns every finish state — "no tool calls" alone never means done.
+  classifyFinish: (lastMessage: Message) => 'done' | 'blocked' | 'empty';
   onEvent?: (event: Record<string, unknown>) => void;
   // Transient API errors (connection drops, 429, 5xx) get retried in-loop so a single
   // gateway blip doesn't kill a long investigation. A retry does NOT consume a turn.
@@ -57,5 +58,5 @@ export type FinalState = {
   turns: number;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   elapsed: number; // ms
-  stopReason: 'done' | 'maxTurns' | 'aborted' | 'error';
+  stopReason: 'done' | 'maxTurns' | 'aborted' | 'error' | 'blocked';
 };
