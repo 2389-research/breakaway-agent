@@ -4,7 +4,9 @@
 import type { Policy, Message } from './types.ts';
 
 export const defaultPolicy: Policy = {
-  maxTurns: 40,
+  // No turn limit by default: a run finishes when the model does, not at an arbitrary count.
+  // `--max-turns N` sets an explicit safety/debug cap; hitting it is an incomplete (nonzero) exit.
+  maxTurns: Infinity,
   onToolError: 'retry',
   contextStrategy: (messages: Message[]) => messages,
   shouldContinue: (msg: Message) => msg.role === 'assistant' && !!msg.tool_calls?.length,
@@ -15,19 +17,19 @@ export const defaultPolicy: Policy = {
   completionAudit: false,
 };
 
-// The "I mean business" profile (--serious): a long horizon for big tasks plus extra
-// blip-survival, since a longer run has more chances to hit a transient gateway error.
+// The "I mean business" profile (--serious): extra blip-survival plus a completion audit for
+// big tasks. Like the default it runs unbounded (maxTurns inherited as Infinity) — the horizon
+// is now the model's own judgment, not a turn count.
 export const seriousPolicy: Policy = {
   ...defaultPolicy,
-  maxTurns: 80,
   apiMaxAttempts: 5,
   // A serious run should not accept the model's first "looks done" at face value — audit it.
   completionAudit: true,
 };
 
-// Resolve CLI intent into a Policy. --serious picks the long-horizon profile; an explicit
-// --max-turns then overrides just the turn budget, so `--serious --max-turns 120` keeps the
-// serious survival settings but runs to 120 turns. No flags → the default policy, by reference.
+// Resolve CLI intent into a Policy. --serious picks the survival profile; an explicit --max-turns
+// then imposes a turn cap on top, so `--serious --max-turns 120` keeps the serious survival
+// settings but stops at 120 turns. No flags → the default policy (unbounded), by reference.
 export function selectPolicy(opts: { serious: boolean; maxTurns: number | null }): Policy {
   const base = opts.serious ? seriousPolicy : defaultPolicy;
   return opts.maxTurns !== null ? { ...base, maxTurns: opts.maxTurns } : base;

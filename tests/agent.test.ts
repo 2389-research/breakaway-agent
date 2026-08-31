@@ -134,40 +134,64 @@ describe('agent run — maxTurns', () => {
     expect(state.turns).toBe(3);
   });
 
-  test('reserves the final turn for synthesis: strips tools and returns a prose answer', async () => {
-    // Model keeps calling tools while any are offered, but produces prose when tools are stripped.
-    mockChat.mockImplementation(async (_messages: Message[], toolDefs: unknown[]) => {
-      if (toolDefs.length === 0) {
-        return {
-          message: { role: 'assistant' as const, content: 'best synthesis given the evidence so far' },
-          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
-          finish_reason: 'stop',
-        };
-      }
-      return {
-        message: {
-          role: 'assistant' as const,
-          content: '',
-          tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'my_tool', arguments: '{}' } }],
-        },
-        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
-        finish_reason: 'tool_calls',
-      };
-    });
+  test('does not strip tools on the final turn — every model call gets the full tool set', async () => {
+    // There is no forced tool-less synthesis turn: the model keeps its tools on every turn,
+    // including the one that hits the cap. Hitting the cap is an incomplete outcome we preserve.
+    mockChat.mockImplementation(async () => ({
+      message: {
+        role: 'assistant' as const,
+        content: '',
+        tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'my_tool', arguments: '{}' } }],
+      },
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      finish_reason: 'tool_calls',
+    }));
 
     const state = await run(initialMessages(), [makeTool('my_tool')], makePolicy({ maxTurns: 3 }));
 
-    // Hitting the cap is still an incomplete outcome...
+    // An explicit cap still returns an incomplete maxTurns result.
     expect(state.stopReason).toBe('maxTurns');
-    // ...but the final message now carries a usable answer instead of an empty tool-call turn.
-    const last = state.messages[state.messages.length - 1];
-    expect(last.role).toBe('assistant');
-    expect(last.content).toBe('best synthesis given the evidence so far');
+    expect(state.turns).toBe(3);
 
-    // The final API call was made with tools disabled; earlier calls had the tool available.
+    // No turn was called with tools stripped — every call saw the one tool.
     const calls = mockChat.mock.calls;
-    expect((calls[0][1] as unknown[]).length).toBe(1);
-    expect((calls[calls.length - 1][1] as unknown[]).length).toBe(0);
+    expect(calls.length).toBe(3);
+    for (const call of calls) {
+      expect((call[1] as unknown[]).length).toBe(1);
+    }
+
+    // Partial output is preserved: the transcript keeps every turn's assistant message.
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant');
+    expect(assistantMsgs.length).toBe(3);
+  });
+
+  test('runs past the old default cap when no explicit limit is set', async () => {
+    // 45 tool turns, then a finish — well past the old default of 40. With no cap, the loop
+    // must not stop early; it runs to a genuine completion instead of a maxTurns cutoff.
+    let calls = 0;
+    mockChat.mockImplementation(async () => {
+      calls++;
+      if (calls <= 45) {
+        return {
+          message: {
+            role: 'assistant' as const,
+            content: '',
+            tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'my_tool', arguments: '{}' } }],
+          },
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+          finish_reason: 'tool_calls' as const,
+        };
+      }
+      return {
+        message: { role: 'assistant' as const, content: 'finally finished' },
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        finish_reason: 'stop' as const,
+      };
+    });
+
+    const state = await run(initialMessages(), [makeTool('my_tool')], makePolicy());
+    expect(state.stopReason).toBe('done');
+    expect(state.turns).toBe(46);
   });
 });
 

@@ -132,15 +132,10 @@ export async function run(
   while (turns < policy.maxTurns) {
     const contextMessages = policy.contextStrategy(allMessages);
 
-    // Reserve the final turn for synthesis: strip tools so the model must answer in prose
-    // instead of spending its last turn on a tool call whose result no one reads.
-    const isFinalTurn = turns === policy.maxTurns - 1;
-    const activeToolDefs = isFinalTurn ? [] : toolDefs;
-
     let response: Awaited<ReturnType<typeof chat>>;
     const apiStart = Date.now();
     try {
-      response = await callChatWithRetry(contextMessages, activeToolDefs, modelOverride, policy);
+      response = await callChatWithRetry(contextMessages, toolDefs, modelOverride, policy);
     } catch (err) {
       allMessages.push({ role: 'assistant', content: `error: ${String(err)}` });
       return {
@@ -173,18 +168,6 @@ export async function run(
         args_chars: tc.function.arguments.length,
       })),
     });
-
-    // Final turn: tools were disabled, so this message is the best answer we can give.
-    // Return it as an incomplete (maxTurns) outcome rather than running tools or claiming 'done'.
-    if (isFinalTurn) {
-      return {
-        messages: allMessages,
-        turns,
-        usage,
-        elapsed: Date.now() - start,
-        stopReason: 'maxTurns',
-      };
-    }
 
     if (finishReason === 'tool_calls' || response.message.tool_calls?.length) {
       const tcs = response.message.tool_calls ?? [];
@@ -232,9 +215,10 @@ export async function run(
     // No tool calls — the model wants to finish.
     if (!policy.shouldContinue(response.message)) {
       // Completion audit: give the model exactly one enforced chance to verify before we accept
-      // a no-tool finish as done. Only fire when there's budget for a real tool-enabled turn
-      // (turns < maxTurns - 1) — otherwise the next turn would be the tool-less final synthesis,
-      // so at the ceiling we preserve normal completion instead of an empty extension.
+      // a no-tool finish as done. Only fire when at least one more turn of budget remains
+      // (turns < maxTurns - 1) so the injected audit turn can actually run; at an explicit
+      // ceiling we accept the finish instead of injecting a prompt no turn would answer.
+      // With no turn limit (the default) maxTurns is Infinity, so this always fires once.
       if (
         policy.completionAudit &&
         !completionAuditTriggered &&

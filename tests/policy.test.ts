@@ -6,8 +6,8 @@ import { defaultPolicy, seriousPolicy, selectPolicy } from '../src/policy.ts';
 import type { Message } from '../src/types.ts';
 
 describe('defaultPolicy', () => {
-  test('maxTurns is 40', () => {
-    expect(defaultPolicy.maxTurns).toBe(40);
+  test('maxTurns has no limit — the default run is unbounded', () => {
+    expect(defaultPolicy.maxTurns).toBe(Infinity);
   });
 
   test('onToolError is retry', () => {
@@ -64,8 +64,8 @@ describe('defaultPolicy', () => {
 });
 
 describe('seriousPolicy — the long-horizon profile', () => {
-  test('maxTurns is 80 — double the default horizon', () => {
-    expect(seriousPolicy.maxTurns).toBe(80);
+  test('maxTurns has no limit — a serious run is unbounded too', () => {
+    expect(seriousPolicy.maxTurns).toBe(Infinity);
   });
 
   test('apiMaxAttempts is higher than default — more blip-survival on a long run', () => {

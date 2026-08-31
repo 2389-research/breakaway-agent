@@ -74,6 +74,13 @@ export function formatStats(state: FinalState): string {
   return `done in ${state.turns} turns, ${state.usage.total_tokens} tokens (prompt: ${state.usage.prompt_tokens} / completion: ${state.usage.completion_tokens}), ${secs}s`;
 }
 
+// Map a finished run's stop reason to a process exit code. Only a real completion is success;
+// hitting the turn cap, erroring, or aborting all exit nonzero so shells and CI can tell an
+// incomplete run from a finished one.
+export function exitCodeForStopReason(stopReason: FinalState['stopReason']): number {
+  return stopReason === 'done' ? 0 : 1;
+}
+
 const USAGE = `
 Usage: bun src/index.ts [OPTIONS] [TASK]
 
@@ -83,9 +90,10 @@ Options:
   --cwd <path>     Change working directory before running tools.
   --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL).
   --system <path>  Path to system prompt file (default: system.txt).
-  --serious        Long-horizon profile: 80 turns, extra API-retry headroom, and a
-                   completion audit that verifies before accepting a finish.
-  --max-turns <n>  Override the loop turn budget (default: policy's maxTurns).
+  --serious        Long-horizon profile: extra API-retry headroom and a completion
+                   audit that verifies before accepting a finish. No turn limit.
+  --max-turns <n>  Safety/debug cap on loop turns (default: no limit). Hitting it
+                   returns an incomplete run and exits nonzero.
   --quiet          Minimal output — tool calls and stats only.
   --debug          Full output — reasoning, api_ms, longer excerpts.
   --help           Print this help and exit.
@@ -489,6 +497,9 @@ async function main(): Promise<void> {
     if (lastMsg && lastMsg.content) {
       process.stdout.write(lastMsg.content + '\n');
     }
+    // Set the exit code (don't process.exit) so stdout and the transcript flush first.
+    // An incomplete run — maxTurns, error, aborted — exits nonzero; only 'done' is success.
+    process.exitCode = exitCodeForStopReason(state.stopReason);
   } else {
     await repl(systemPrompt, systemPath, model, tier, policy);
   }
