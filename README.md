@@ -31,8 +31,9 @@ bun src/index.ts
 --cwd <path>     Change working directory before running tools
 --model <name>   Override the model (env: OPENAI_COMPATIBLE_MODEL)
 --system <path>  Path to system prompt file (default: system.txt)
---serious        Long-horizon profile: extra API-retry headroom and a completion
-                 audit that verifies before accepting a finish (no turn limit)
+--serious        Long-horizon profile: extra API-retry headroom, nudge-on-tool-
+                 error (adapt, don't blind-retry), and a completion audit that
+                 verifies before accepting a finish (no turn limit)
 --max-turns <n>  Safety/debug cap on loop turns (default: no limit); hitting it
                  exits nonzero with an incomplete run
 --quiet          Minimal progress: tool calls and stats only
