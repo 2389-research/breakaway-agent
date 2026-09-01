@@ -81,11 +81,14 @@ export const defaultPolicy: Policy = {
 };
 
 // The "I mean business" profile (--serious): extra blip-survival on top of the default. The
-// completion audit is already baseline (on in defaultPolicy), so serious only needs to add more
-// API-retry headroom. Like the default it runs unbounded (maxTurns inherited as Infinity).
+// completion audit is already baseline (on in defaultPolicy), so serious adds more API-retry
+// headroom and switches tool-error handling to 'nudge' — on a long run, blindly re-running a
+// deterministically-failing call just burns a turn, so hand the error back to the model to adapt.
+// Like the default it runs unbounded (maxTurns inherited as Infinity).
 export const seriousPolicy: Policy = {
   ...defaultPolicy,
   apiMaxAttempts: 5,
+  onToolError: 'nudge',
 };
 
 // Resolve CLI intent into a Policy. --serious picks the survival profile; an explicit --max-turns

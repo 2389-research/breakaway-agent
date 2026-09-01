@@ -97,9 +97,14 @@ describe('seriousPolicy — the long-horizon profile', () => {
     expect(seriousPolicy.completionAudit).toBe(true);
   });
 
-  test('inherits the rest of the default policy', () => {
-    expect(seriousPolicy.onToolError).toBe(defaultPolicy.onToolError);
+  test('onToolError is nudge — serious diverges from the default so a bad tool call adapts instead of blindly re-running', () => {
+    expect(seriousPolicy.onToolError).toBe('nudge');
+    expect(defaultPolicy.onToolError).toBe('retry');
+  });
+
+  test('inherits classifyFinish and contextStrategy from the default', () => {
     expect(seriousPolicy.classifyFinish).toBe(defaultPolicy.classifyFinish);
+    expect(seriousPolicy.contextStrategy).toBe(defaultPolicy.contextStrategy);
   });
 });
 
