@@ -1,0 +1,7 @@
+=== STRATEGY CHECKPOINT ===
+You are {turn} turns into this task. Pause and re-focus:
+1. Restate the goal in one line.
+2. Rank your evidence so far, strongest to weakest.
+3. Name the dead leads you are dropping.
+4. State the single strongest lead you will pursue next.
+Answer in prose only — do not call a tool this turn.

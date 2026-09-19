@@ -35,6 +35,7 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
   before the last completed checkpoint while keeping every checkpoint summary (the view
   only — `allMessages` and the transcript keep every turn).
 - `system.txt` — prompt is data; swap with `--system <path>`.
+- `checkpoint.txt` — the strategy-checkpoint prompt is data too, with a `{turn}` placeholder; edit it, keep the first line as the marker, picked up on the next run. Embedded in the binary as a fallback; not hot-reloaded.
 - `src/transcript.ts` — every run appends JSONL to `.transcripts/` (anchored to
   the source dir, never the `--cwd` target).
 

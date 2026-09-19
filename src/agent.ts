@@ -4,6 +4,9 @@
 import { chat } from './client.ts';
 import { redactSecrets } from './redact.ts';
 import type { Message, Tool, Policy, FinalState, ToolCall, ToolDefinition } from './types.ts';
+import defaultCheckpointText from '../checkpoint.txt' with { type: 'text' };
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // Injected once when the model first tries to finish under a completion-audit policy, forcing it
 // to prove the task is actually done (with tools) before we accept a no-tool answer as complete.
@@ -23,21 +26,33 @@ const EMPTY_RESPONSE_NUDGE =
 // follows on the next line). The compactor (policy.ts) detects checkpoints with
 // content.startsWith(STRATEGY_CHECKPOINT_MARKER): a prefix match still tolerates the trailing turn
 // number, and — unlike includes — it won't misfire on a gathered child result that only contains the
-// marker mid-body (e.g. a child that printed agent.ts source).
+// marker mid-body (e.g. a child that printed agent.ts source). It stays a code constant — never read
+// from the file — because policy.ts shares it: checkpoint.txt's first line must equal it, and a test
+// guards that coupling so an edit to the file can't silently break compaction detection.
 export const STRATEGY_CHECKPOINT_MARKER = '=== STRATEGY CHECKPOINT ===';
 
-// The checkpoint prompt: a mid-run reflection that re-focuses the model and gives the compactor a
-// boundary. The turn number is for the model's benefit only; detection ignores it.
-function strategyCheckpointPrompt(turn: number): string {
-  return (
-    `${STRATEGY_CHECKPOINT_MARKER}\n` +
-    `You are ${turn} turns into this task. Pause and re-focus:\n` +
-    `1. Restate the goal in one line.\n` +
-    `2. Rank your evidence so far, strongest to weakest.\n` +
-    `3. Name the dead leads you are dropping.\n` +
-    `4. State the single strongest lead you will pursue next.\n` +
-    `Answer in prose only — do not call a tool this turn.`
-  );
+// The checkpoint prompt is editable data: it lives in checkpoint.txt (with a {turn} placeholder), so
+// it can be tuned without touching code — the same "prompt is data" treatment as system.txt. Disk is
+// the primary source, so an edit takes effect on the next run; the embedded import is the fallback the
+// compiled binary uses, where checkpoint.txt is not on disk. Anchored before any chdir, like the
+// other seams, and loaded once at module load.
+const CHECKPOINT_SOURCE_DIR = import.meta.dir;
+const DEFAULT_CHECKPOINT_PATH = join(CHECKPOINT_SOURCE_DIR, '../checkpoint.txt');
+
+export function loadCheckpointTemplate(path: string = DEFAULT_CHECKPOINT_PATH): string {
+  try {
+    return readFileSync(path, 'utf8').trim();
+  } catch {
+    return defaultCheckpointText.trim();
+  }
+}
+
+const CHECKPOINT_TEMPLATE = loadCheckpointTemplate();
+
+// A mid-run reflection that re-focuses the model and gives the compactor a boundary. The turn number
+// is for the model's benefit only; detection ignores it.
+export function strategyCheckpointPrompt(turn: number): string {
+  return CHECKPOINT_TEMPLATE.replaceAll('{turn}', String(turn));
 }
 
 function emitEvent(policy: Policy, event: Record<string, unknown>): void {

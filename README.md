@@ -65,6 +65,8 @@ The model drives five tools:
 
 **Swap the system prompt:** pass `--system /path/to/your/prompt.txt`, or edit `system.txt` directly.
 
+**Tune the checkpoint prompt:** edit `checkpoint.txt` — the mid-run reflection injected every N turns, with a `{turn}` placeholder. Keep the first line (`=== STRATEGY CHECKPOINT ===`) intact; the compactor keys on it. Loaded once at startup, so a fresh run picks up edits (not on the hot-reload path).
+
 **Change max turns or error policy:** edit `src/policy.ts`. `onToolError` accepts `'retry' | 'abort' | 'nudge'`.
 
 **Swap context strategy:** replace `contextStrategy` in `src/policy.ts` with a function that filters or trims the message array. A sliding-window example lives in `e2e/seam-proof.ts`.
