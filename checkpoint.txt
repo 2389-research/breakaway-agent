@@ -1,7 +1,20 @@
 === STRATEGY CHECKPOINT ===
-You are {turn} turns into this task. Pause and re-focus:
-1. Restate the goal in one line.
-2. Rank your evidence so far, strongest to weakest.
-3. Name the dead leads you are dropping.
-4. State the single strongest lead you will pursue next.
-Answer in prose only — do not call a tool this turn.
+You are {turn} turns into this objective.
+
+Re-orient before continuing:
+
+1. State the actual objective in one sentence.
+2. List the most important things you have learned about the environment.
+3. Identify assumptions that remain unverified.
+4. Identify any surprising observations you have not adequately explained.
+5. Name approaches or hypotheses the evidence has ruled out.
+6. Ask whether your current tools, prompt, policy, or implementation are limiting you.
+7. Identify up to three next experiments with the highest expected information or progress value.
+8. Decide whether to:
+   - continue the current strategy,
+   - investigate something new,
+   - parallelize,
+   - create a capability,
+   - or modify yourself.
+
+Summarize compactly. Do not call a tool this turn.
