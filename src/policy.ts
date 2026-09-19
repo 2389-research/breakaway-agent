@@ -47,7 +47,10 @@ export const defaultPolicy: Policy = {
   // No turn limit by default: a run finishes when the model does, not at an arbitrary count.
   // `--max-turns N` sets an explicit safety/debug cap; hitting it is an incomplete (nonzero) exit.
   maxTurns: Infinity,
-  onToolError: 'retry',
+  // Hand a failed tool call back to the model to adapt instead of blindly re-running it. On a long run
+  // a deterministically-failing call (bad path, missing file, malformed args) just fails again and
+  // burns a turn, so nudge-and-adapt is the better baseline than a blind retry.
+  onToolError: 'nudge',
   contextStrategy: compactByCheckpoints,
   // A finish must be a real answer, an honest block, or a blank. A blank no-tool response is
   // 'empty' (never 'done'); a line beginning BLOCKED: is an honest terminal state.
@@ -59,7 +62,7 @@ export const defaultPolicy: Policy = {
     return 'done';
   },
   // Survival by default: retry transient gateway blips so a run finishes instead of dying at turn N.
-  apiMaxAttempts: 3,
+  apiMaxAttempts: 5,
   apiRetryBaseMs: 750,
   // A blank finish gets this many nudges to recover before the run ends as 'error' (never a false done).
   maxEmptyRetries: 1,
@@ -80,21 +83,9 @@ export const defaultPolicy: Policy = {
     }),
 };
 
-// The "I mean business" profile (--serious): extra blip-survival on top of the default. The
-// completion audit is already baseline (on in defaultPolicy), so serious adds more API-retry
-// headroom and switches tool-error handling to 'nudge' — on a long run, blindly re-running a
-// deterministically-failing call just burns a turn, so hand the error back to the model to adapt.
-// Like the default it runs unbounded (maxTurns inherited as Infinity).
-export const seriousPolicy: Policy = {
-  ...defaultPolicy,
-  apiMaxAttempts: 5,
-  onToolError: 'nudge',
-};
-
-// Resolve CLI intent into a Policy. --serious picks the survival profile; an explicit --max-turns
-// then imposes a turn cap on top, so `--serious --max-turns 120` keeps the serious survival
-// settings but stops at 120 turns. No flags → the default policy (unbounded), by reference.
-export function selectPolicy(opts: { serious: boolean; maxTurns: number | null }): Policy {
-  const base = opts.serious ? seriousPolicy : defaultPolicy;
-  return opts.maxTurns !== null ? { ...base, maxTurns: opts.maxTurns } : base;
+// Resolve CLI intent into a Policy. The default policy already carries the long-horizon survival
+// settings (apiMaxAttempts, nudge-on-tool-error, and the completion audit); an explicit --max-turns
+// imposes a turn cap on top of it. No cap → the default policy (unbounded), by reference.
+export function selectPolicy(opts: { maxTurns: number | null }): Policy {
+  return opts.maxTurns !== null ? { ...defaultPolicy, maxTurns: opts.maxTurns } : defaultPolicy;
 }

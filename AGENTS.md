@@ -9,8 +9,8 @@ the measure of every change is "how many lines do I touch to try a weird idea?"
 ## What this is
 
 - `bun src/index.ts "task"` — one-shot. `bun src/index.ts` — REPL.
-- Flags: `--cwd`, `--model`, `--system`, `--serious`, `--max-turns`, `--quiet`, `--debug`, `--help`.
-- `--serious`: long-horizon profile (`seriousPolicy` in policy.ts) — `apiMaxAttempts: 5` on top of the default (the completion audit is now baseline, on for every run), no turn limit (like the default). `--max-turns N` imposes an explicit safety/debug cap on top; hitting it exits nonzero.
+- Flags: `--cwd`, `--model`, `--system`, `--max-turns`, `--quiet`, `--debug`, `--help`.
+- The default policy IS the long-horizon profile: `apiMaxAttempts: 5`, `onToolError: 'nudge'`, and the completion audit, all on for every run, with no turn limit. There is no `--serious` flag — it was folded into the default. `--max-turns N` imposes an explicit safety/debug cap on top; hitting it exits nonzero.
 - Output tiers: `--quiet` (tool calls + stats), default `rich` (reasoning + interim prose + tool snippets), `--debug` (rich + api_ms + longer excerpts). `--quiet` and `--debug` are mutually exclusive.
 - **Pure YOLO by design**: no permission prompts, no sandbox, no confirmation
   gates. The agent executes whatever the model asks. This is intentional

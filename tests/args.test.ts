@@ -97,15 +97,9 @@ describe('parseArgs — --max-turns', () => {
   });
 });
 
-describe('parseArgs — --serious', () => {
-  test('--serious sets serious=true', () => {
-    const result = parseArgs(args('--serious', 'big task'));
-    expect(result.serious).toBe(true);
-    expect(result.task).toBe('big task');
-  });
-
-  test('defaults to serious=false when absent', () => {
-    expect(parseArgs(args('task')).serious).toBe(false);
+describe('parseArgs — --serious removed (folded into the default policy)', () => {
+  test('--serious is now an unknown flag', () => {
+    expect(parseArgs(args('--serious', 'big task')).unknownFlag).toBe('--serious');
   });
 });
 

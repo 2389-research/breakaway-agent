@@ -2,7 +2,7 @@
 // ABOUTME: No I/O; pure assertions against the exported policy object.
 
 import { describe, test, expect } from 'bun:test';
-import { defaultPolicy, seriousPolicy, selectPolicy, compactByCheckpoints } from '../src/policy.ts';
+import { defaultPolicy, selectPolicy, compactByCheckpoints } from '../src/policy.ts';
 import { STRATEGY_CHECKPOINT_MARKER } from '../src/agent.ts';
 import type { Message } from '../src/types.ts';
 
@@ -11,8 +11,12 @@ describe('defaultPolicy', () => {
     expect(defaultPolicy.maxTurns).toBe(Infinity);
   });
 
-  test('onToolError is retry', () => {
-    expect(defaultPolicy.onToolError).toBe('retry');
+  test('onToolError is nudge — a bad tool call adapts instead of blindly re-running', () => {
+    expect(defaultPolicy.onToolError).toBe('nudge');
+  });
+
+  test('apiMaxAttempts is 5 — transient-blip survival headroom is the baseline', () => {
+    expect(defaultPolicy.apiMaxAttempts).toBe(5);
   });
 
   test('contextStrategy is identity — returns same array', () => {
@@ -83,50 +87,16 @@ describe('defaultPolicy', () => {
   });
 });
 
-describe('seriousPolicy — the long-horizon profile', () => {
-  test('maxTurns has no limit — a serious run is unbounded too', () => {
-    expect(seriousPolicy.maxTurns).toBe(Infinity);
-  });
-
-  test('apiMaxAttempts is higher than default — more blip-survival on a long run', () => {
-    expect(seriousPolicy.apiMaxAttempts).toBe(5);
-    expect(defaultPolicy.apiMaxAttempts).toBe(3);
-  });
-
-  test('completionAudit is on — a serious run audits its own completion before finishing', () => {
-    expect(seriousPolicy.completionAudit).toBe(true);
-  });
-
-  test('onToolError is nudge — serious diverges from the default so a bad tool call adapts instead of blindly re-running', () => {
-    expect(seriousPolicy.onToolError).toBe('nudge');
-    expect(defaultPolicy.onToolError).toBe('retry');
-  });
-
-  test('inherits classifyFinish and contextStrategy from the default', () => {
-    expect(seriousPolicy.classifyFinish).toBe(defaultPolicy.classifyFinish);
-    expect(seriousPolicy.contextStrategy).toBe(defaultPolicy.contextStrategy);
-  });
-});
-
 describe('selectPolicy — CLI intent to policy', () => {
-  test('neither flag: the default policy, by reference', () => {
-    expect(selectPolicy({ serious: false, maxTurns: null })).toBe(defaultPolicy);
+  test('no cap: the default policy, by reference', () => {
+    expect(selectPolicy({ maxTurns: null })).toBe(defaultPolicy);
   });
 
-  test('--serious: the serious profile, by reference', () => {
-    expect(selectPolicy({ serious: true, maxTurns: null })).toBe(seriousPolicy);
-  });
-
-  test('--max-turns overrides the default horizon and leaves the rest default', () => {
-    const p = selectPolicy({ serious: false, maxTurns: 10 });
+  test('--max-turns overrides the horizon and leaves the survival baseline intact', () => {
+    const p = selectPolicy({ maxTurns: 10 });
     expect(p.maxTurns).toBe(10);
-    expect(p.apiMaxAttempts).toBe(3);
-  });
-
-  test('explicit --max-turns wins over --serious, but keeps the serious survival bump', () => {
-    const p = selectPolicy({ serious: true, maxTurns: 120 });
-    expect(p.maxTurns).toBe(120); // explicit number wins
-    expect(p.apiMaxAttempts).toBe(5); // ...but serious survival stays
+    expect(p.apiMaxAttempts).toBe(5); // survival headroom is the default now
+    expect(p.onToolError).toBe('nudge');
   });
 });
 
